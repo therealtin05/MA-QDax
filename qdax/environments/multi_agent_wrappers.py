@@ -1,20 +1,19 @@
 from typing import Any, Dict
 
-import jax
 import jax.numpy as jnp
 from brax import jumpy as jp
 from brax.envs import Env, State, Wrapper
 
 _agent_action_mapping = {
     "walker2d": {
-        0: (slice(0, 3),),
-        1: (slice(3, 6),),
+        0: jnp.array([0, 1, 2]),
+        1: jnp.array([3, 4, 5]),
     },
     "ant": {
-        0: (slice(0, 2),),
-        1: (slice(2, 4),),
-        2: (slice(4, 6),),
-        3: (slice(6, 8),),
+        0: jnp.array([0, 1]),
+        1: jnp.array([2, 3]),
+        2: jnp.array([4, 5]),
+        3: jnp.array([6, 7]),
     },
 }
 
@@ -50,15 +49,14 @@ class MultiAgentBraxWrapper(Wrapper):
     def get_obs_sizes(self) -> Dict[int, int]:
         return {k: v.size for k, v in self.agent_obs_mapping.items()}
 
+    def get_action_sizes(self) -> Dict[int, int]:
+        return {k: v.size for k, v in self.agent_action_mapping.items()}
+
     def map_agents_to_global_action(self, agent_actions: jp.ndarray) -> jp.ndarray:
         global_action = jnp.zeros(self.env.action_size)
         for agent_idx, action_indices in self.agent_action_mapping.items():
-            # TODO: Remove assumption that all agents have the same action
-            # space size and that each agent's actions are contiguous in the
-            # global action space
-            start, stop, _ = action_indices[0].indices(self.env.action_size)
-            global_action = jax.lax.dynamic_update_slice(
-                global_action, agent_actions[agent_idx], (start,)
+            global_action = global_action.at[action_indices].set(
+                agent_actions[agent_idx]
             )
         return global_action
 

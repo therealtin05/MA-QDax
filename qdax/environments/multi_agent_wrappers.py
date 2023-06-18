@@ -477,7 +477,7 @@ class MultiAgentBraxWrapper(Wrapper):
         self.agent_action_mapping = _agent_action_mapping[env_name]
         self.agent_obs_mapping = _agent_obs_mapping[env_name]
 
-    def step(self, state: State, agent_actions: jp.ndarray) -> State:
+    def step(self, state: State, agent_actions: Dict[int, jp.ndarray]) -> State:
         global_action = self.map_agents_to_global_action(agent_actions)
         return self.env.step(state, global_action)
 
@@ -490,7 +490,9 @@ class MultiAgentBraxWrapper(Wrapper):
     def get_action_sizes(self) -> Dict[int, int]:
         return {k: v.size for k, v in self.agent_action_mapping.items()}
 
-    def map_agents_to_global_action(self, agent_actions: jp.ndarray) -> jp.ndarray:
+    def map_agents_to_global_action(
+        self, agent_actions: Dict[int, jp.ndarray]
+    ) -> jp.ndarray:
         global_action = jnp.zeros(self.env.action_size)
         for agent_idx, action_indices in self.agent_action_mapping.items():
             global_action = global_action.at[action_indices].set(

@@ -57,8 +57,10 @@ class MultiAgentMixingEmitter(Emitter):
             a batch of offsprings
             a new jax PRNG key
         """
-        # self._agents_to_mutate random indices of agents to mutate or vary
-        agent_indices = random.sample(range(self._num_agents), self._agents_to_mutate)
+        # self._agents_to_mutate random indices of agents to not vary
+        agent_indices = random.sample(
+            range(self._num_agents), self._num_agents - self._agents_to_mutate
+        )
 
         n_variation = int(self._batch_size * self._variation_percentage)
         n_mutation = self._batch_size - n_variation

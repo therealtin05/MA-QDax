@@ -1,3 +1,4 @@
+import random
 from functools import partial
 from typing import Callable, Optional, Tuple
 
@@ -56,13 +57,8 @@ class MultiAgentMixingEmitter(Emitter):
             a batch of offsprings
             a new jax PRNG key
         """
-        # Indices of agents to mutate or vary
-        # agent_indices = jax.random.choice(
-        #   random_key,
-        #   self._num_agents,
-        #   (self._agents_to_mutate,),
-        #   replace=False
-        # )
+        # self._agents_to_mutate random indices of agents to mutate or vary
+        agent_indices = random.sample(range(self._num_agents), self._agents_to_mutate)
 
         n_variation = int(self._batch_size * self._variation_percentage)
         n_mutation = self._batch_size - n_variation
@@ -73,17 +69,17 @@ class MultiAgentMixingEmitter(Emitter):
 
             x_variation, random_key = self._variation_fn(x1, x2, random_key)
 
-            # Put back agents in their original positions
-            # mask = jnp.zeros(self._num_agents, dtype=bool).at[agent_indices].set(True)
-            # x_variation = jnp.where(mask, x1, x_variation)
+            # Put back agents in their original positions (x_variation is a list)
+            for i in agent_indices:
+                x_variation[i] = x1[i]
 
         if n_mutation > 0:
             x1, random_key = repertoire.sample(random_key, n_mutation)
             x_mutation, random_key = self._mutation_fn(x1, random_key)
 
             # Put back agents in their original positions
-            # mask = jnp.zeros(self._num_agents, dtype=bool).at[agent_indices].set(True)
-            # x_mutation = jnp.where(mask, x1, x_mutation)
+            for i in agent_indices:
+                x_mutation[i] = x1[i]
 
         if n_variation == 0:
             genotypes = x_mutation

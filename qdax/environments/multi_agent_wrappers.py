@@ -103,12 +103,20 @@ _agent_obs_mapping = {
 
 
 class MultiAgentBraxWrapper(Wrapper):
-    def __init__(self, env: Env, env_name: str, parameter_sharing: bool, **kwargs: Any):
+    def __init__(
+        self,
+        env: Env,
+        env_name: str,
+        parameter_sharing: bool,
+        emitter_type: str,
+        **kwargs: Any,
+    ):
         self.env = env
         self.env_name = env_name
         self.agent_action_mapping = _agent_action_mapping[env_name]
         self.agent_obs_mapping = _agent_obs_mapping[env_name]
         self.parameter_sharing = parameter_sharing
+        self.emitter_type = emitter_type
         self._kwargs = kwargs
 
     def step(self, state: State, agent_actions: Dict[int, jp.ndarray]) -> State:
@@ -119,9 +127,13 @@ class MultiAgentBraxWrapper(Wrapper):
         return self.map_global_obs_to_agents(state.obs)
 
     def get_obs_sizes(self) -> Dict[int, int]:
+        if self.emitter_type == "shared_pool" or self.parameter_sharing:
+            return {k: self.env.observation_size for k in self.agent_obs_mapping.keys()}
         return {k: v.size for k, v in self.agent_obs_mapping.items()}
 
     def get_action_sizes(self) -> Dict[int, int]:
+        if self.emitter_type == "shared_pool" or self.parameter_sharing:
+            return {k: self.env.action_size for k in self.agent_action_mapping.keys()}
         return {k: v.size for k, v in self.agent_action_mapping.items()}
 
     def map_agents_to_global_action(
@@ -129,7 +141,7 @@ class MultiAgentBraxWrapper(Wrapper):
     ) -> jp.ndarray:
         global_action = jnp.zeros(self.env.action_size)
         for agent_idx, action_indices in self.agent_action_mapping.items():
-            if self.parameter_sharing:
+            if self.parameter_sharing or self.emitter_type == "shared_pool":
                 global_action = global_action.at[action_indices].add(
                     agent_actions[agent_idx][action_indices]
                 )
@@ -142,7 +154,7 @@ class MultiAgentBraxWrapper(Wrapper):
     def map_global_obs_to_agents(self, global_obs: jp.ndarray) -> Dict[int, jp.ndarray]:
         agent_obs = {}
         for agent_idx, obs_indices in self.agent_obs_mapping.items():
-            if self.parameter_sharing:
+            if self.parameter_sharing or self.emitter_type == "shared_pool":
                 # Zero vector except for the agent's own observations
                 agent_obs[agent_idx] = (
                     jnp.zeros(global_obs.shape)

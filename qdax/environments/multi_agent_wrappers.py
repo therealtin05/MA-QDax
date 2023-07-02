@@ -109,6 +109,7 @@ class MultiAgentBraxWrapper(Wrapper):
         env_name: str,
         parameter_sharing: bool,
         emitter_type: str,
+        homogenisation_method: str,
         **kwargs: Any,
     ):
         self.env = env
@@ -117,6 +118,7 @@ class MultiAgentBraxWrapper(Wrapper):
         self.agent_obs_mapping = _agent_obs_mapping[env_name]
         self.parameter_sharing = parameter_sharing
         self.emitter_type = emitter_type
+        self.homogenisation_method = homogenisation_method
         self._kwargs = kwargs
 
     def step(self, state: State, agent_actions: Dict[int, jp.ndarray]) -> State:
@@ -128,12 +130,28 @@ class MultiAgentBraxWrapper(Wrapper):
 
     def get_obs_sizes(self) -> Dict[int, int]:
         if self.emitter_type == "shared_pool" or self.parameter_sharing:
-            return {k: self.env.observation_size for k in self.agent_obs_mapping.keys()}
+            if self.homogenisation_method == "max":
+                return {
+                    k: 1 + max([v.size for v in self.agent_obs_mapping.values()])
+                    for k in self.agent_obs_mapping.keys()
+                }
+            else:
+                return {
+                    k: self.env.observation_size for k in self.agent_obs_mapping.keys()
+                }
         return {k: v.size for k, v in self.agent_obs_mapping.items()}
 
     def get_action_sizes(self) -> Dict[int, int]:
         if self.emitter_type == "shared_pool" or self.parameter_sharing:
-            return {k: self.env.action_size for k in self.agent_action_mapping.keys()}
+            if self.homogenisation_method == "max":
+                return {
+                    k: max([v.size for v in self.agent_action_mapping.values()])
+                    for k in self.agent_action_mapping.keys()
+                }
+            else:
+                return {
+                    k: self.env.action_size for k in self.agent_action_mapping.keys()
+                }
         return {k: v.size for k, v in self.agent_action_mapping.items()}
 
     def map_agents_to_global_action(
@@ -142,9 +160,14 @@ class MultiAgentBraxWrapper(Wrapper):
         global_action = jnp.zeros(self.env.action_size)
         for agent_idx, action_indices in self.agent_action_mapping.items():
             if self.parameter_sharing or self.emitter_type == "shared_pool":
-                global_action = global_action.at[action_indices].add(
-                    agent_actions[agent_idx][action_indices]
-                )
+                if self.homogenisation_method == "max":
+                    global_action = global_action.at[action_indices].set(
+                        agent_actions[agent_idx][: action_indices.size]
+                    )
+                else:
+                    global_action = global_action.at[action_indices].set(
+                        agent_actions[agent_idx][action_indices]
+                    )
             else:
                 global_action = global_action.at[action_indices].set(
                     agent_actions[agent_idx]
@@ -155,12 +178,27 @@ class MultiAgentBraxWrapper(Wrapper):
         agent_obs = {}
         for agent_idx, obs_indices in self.agent_obs_mapping.items():
             if self.parameter_sharing or self.emitter_type == "shared_pool":
-                # Zero vector except for the agent's own observations
-                agent_obs[agent_idx] = (
-                    jnp.zeros(global_obs.shape)
-                    .at[obs_indices]
-                    .set(global_obs[obs_indices])
-                )
+                if self.homogenisation_method == "max":
+                    # Vector with the agent idx as the first element and then the
+                    # agent's own observations (zero padded to the size of the largest
+                    # agent observation vector + 1)
+                    agent_obs[agent_idx] = (
+                        jnp.zeros(
+                            1 + max([v.size for v in self.agent_obs_mapping.values()])
+                        )
+                        .at[0]
+                        .set(agent_idx)
+                        .at[1 : 1 + obs_indices.size]
+                        .set(global_obs[obs_indices])
+                    )
+                else:
+                    # Zero vector except for the agent's own observations
+                    # (size of the global observation vector)
+                    agent_obs[agent_idx] = (
+                        jnp.zeros(global_obs.shape)
+                        .at[obs_indices]
+                        .set(global_obs[obs_indices])
+                    )
             else:
                 # Just agent's own observations
                 agent_obs[agent_idx] = global_obs[obs_indices]

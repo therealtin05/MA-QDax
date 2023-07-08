@@ -169,7 +169,7 @@ class MapElitesRepertoire(flax.struct.PyTreeNode):
             return flatten_genotype
 
         # flatten all the genotypes
-        flat_genotypes = jax.vmap(flatten_genotype)(self.genotypes)
+        flat_genotypes, _ = ravel_pytree(self.genotypes)
 
         # save data
         jnp.save(path + "genotypes.npy", flat_genotypes)
@@ -191,7 +191,7 @@ class MapElitesRepertoire(flax.struct.PyTreeNode):
         """
 
         flat_genotypes = jnp.load(path + "genotypes.npy")
-        genotypes = jax.vmap(reconstruction_fn)(flat_genotypes)
+        genotypes = reconstruction_fn(flat_genotypes)
 
         fitnesses = jnp.load(path + "fitnesses.npy")
         descriptors = jnp.load(path + "descriptors.npy")

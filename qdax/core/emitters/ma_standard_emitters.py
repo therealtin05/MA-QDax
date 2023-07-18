@@ -105,21 +105,25 @@ class NaiveMultiAgentMixingEmitter(Emitter):
         return self._batch_size
 
 
-class RolePreservingMultiAgentMixingEmitter(Emitter):
+class MultiAgentEmitter(Emitter):
     def __init__(
         self,
         mutation_fn: Callable[[Genotype, RNGKey], Tuple[Genotype, RNGKey]],
         variation_fn: Callable[[Genotype, Genotype, RNGKey], Tuple[Genotype, RNGKey]],
         variation_percentage: float,
+        crossplay_percentage: float,
         batch_size: int,
         num_agents: int,
+        role_preserving: bool = True,
         **kwargs: Dict,
     ) -> None:
         self._mutation_fn = mutation_fn
         self._variation_fn = variation_fn
         self._variation_percentage = variation_percentage
+        self._crossplay_percentage = crossplay_percentage
         self._batch_size = batch_size
         self._num_agents = num_agents
+        self._role_preserving = role_preserving
 
     @partial(
         jax.jit,
@@ -152,149 +156,42 @@ class RolePreservingMultiAgentMixingEmitter(Emitter):
             a new jax PRNG key
         """
         # The indices of agents to vary
+        assert (
+            0 <= self._variation_percentage + self._crossplay_percentage <= 1.0
+        ), "The sum of variation and crossplay percentages must be between 0 and 1"
 
         n_variation = int(self._batch_size * self._variation_percentage)
-        n_mutation = self._batch_size - n_variation
+        n_crossplay = int(self._batch_size * self._crossplay_percentage)
+        n_mutation = self._batch_size - n_variation - n_crossplay
         x_variation = None
         x_mutation = None
+        x_crossplay = None
 
         if n_variation > 0:
-            # FIXME: this is not efficient, we should sample only once
-            for i in range(self._num_agents):
-                x1, random_key = repertoire.sample(random_key, n_variation)
-                x2, random_key = repertoire.sample(random_key, n_variation)
-
-                x_variation_, random_key = self._variation_fn(x1, x2, random_key)
-
-                if x_variation is None:
-                    x_variation = x_variation_
-                else:
-                    x_variation[i] = x_variation_[i]
+            x1, random_key = repertoire.sample(random_key, n_variation)
+            x2, random_key = repertoire.sample(random_key, n_variation)
+            x_variation, random_key = self._variation_fn(x1, x2, random_key)
 
         if n_mutation > 0:
-            # FIXME: this is not efficient, we should sample only once
+            x1, random_key = repertoire.sample(random_key, n_mutation)
+            x_mutation, random_key = self._mutation_fn(x1, random_key)
+
+        if n_crossplay > 0:
+            # TODO: this is not efficient, we should sample only once
+            x_crossplay = [None] * self._num_agents
             for i in range(self._num_agents):
-                x1, random_key = repertoire.sample(random_key, n_mutation)
-                x_mutation_, random_key = self._mutation_fn(x1, random_key)
+                x1, random_key = repertoire.sample(random_key, n_crossplay)
 
-                if x_mutation is None:
-                    x_mutation = x_mutation_
-                else:
-                    x_mutation[i] = x_mutation_[i]
+                x_crossplay[i] = (
+                    x1[i]
+                    if self._role_preserving
+                    else x1[random.randint(0, self._num_agents - 1)]
+                )
 
-        if n_variation == 0:
-            genotypes = x_mutation
-        elif n_mutation == 0:
-            genotypes = x_variation
-        else:
-            genotypes = jax.tree_util.tree_map(
-                lambda x_1, x_2: jnp.concatenate([x_1, x_2], axis=0),
-                x_variation,
-                x_mutation,
-            )
-
-        return genotypes, random_key
-
-    @property
-    def batch_size(self) -> int:
-        """
-        Returns:
-            the batch size emitted by the emitter.
-        """
-        return self._batch_size
-
-
-class SharedPoolMultiAgentMixingEmitter(Emitter):
-    def __init__(
-        self,
-        mutation_fn: Callable[[Genotype, RNGKey], Tuple[Genotype, RNGKey]],
-        variation_fn: Callable[[Genotype, Genotype, RNGKey], Tuple[Genotype, RNGKey]],
-        variation_percentage: float,
-        batch_size: int,
-        num_agents: int,
-        **kwargs: Dict,
-    ) -> None:
-        self._mutation_fn = mutation_fn
-        self._variation_fn = variation_fn
-        self._variation_percentage = variation_percentage
-        self._batch_size = batch_size
-        self._num_agents = num_agents
-
-    @partial(
-        jax.jit,
-        static_argnames=("self",),
-    )
-    def emit(
-        self,
-        repertoire: Repertoire,
-        emitter_state: Optional[EmitterState],
-        random_key: RNGKey,
-    ) -> Tuple[Genotype, RNGKey]:
-        """
-        Emitter that performs both mutation and variation. Two batches of
-        variation_percentage * batch_size genotypes are sampled in the
-        repertoire, copied and cross-over to obtain new offsprings. One batch
-        of (1.0 - variation_percentage) * batch_size genotypes are sampled in
-        the repertoire, copied and mutated.
-
-        Note: this emitter has no state. A fake none state must be added
-        through a function redefinition to make this emitter usable with
-        MAP-Elites.
-
-        Params:
-            repertoire: the MAP-Elites repertoire to sample from
-            emitter_state: void
-            random_key: a jax PRNG random key
-
-        Returns:
-            a batch of offsprings
-            a new jax PRNG key
-        """
-        # The indices of agents to vary
-
-        n_variation = int(self._batch_size * self._variation_percentage)
-        n_mutation = self._batch_size - n_variation
-        x_variation = None
-        x_mutation = None
-
-        if n_variation > 0:
-            # FIXME: this is not efficient, we should sample only once
-            for i in range(self._num_agents):
-                x1, random_key = repertoire.sample(random_key, n_variation)
-                x2, random_key = repertoire.sample(random_key, n_variation)
-
-                x_variation_, random_key = self._variation_fn(x1, x2, random_key)
-
-                if x_variation is None:
-                    x_variation = x_variation_
-
-                # Sample an agent from the tuple
-                j = random.randint(0, self._num_agents - 1)
-                x_variation[i] = x_variation_[j]
-
-        if n_mutation > 0:
-            # FIXME: this is not efficient, we should sample only once
-            for i in range(self._num_agents):
-                x1, random_key = repertoire.sample(random_key, n_mutation)
-                x_mutation_, random_key = self._mutation_fn(x1, random_key)
-
-                if x_mutation is None:
-                    x_mutation = x_mutation_
-
-                # Sample an agent from the tuple
-                j = random.randint(0, self._num_agents - 1)
-                x_mutation[i] = x_mutation_[j]
-
-        if n_variation == 0:
-            genotypes = x_mutation
-        elif n_mutation == 0:
-            genotypes = x_variation
-        else:
-            genotypes = jax.tree_util.tree_map(
-                lambda x_1, x_2: jnp.concatenate([x_1, x_2], axis=0),
-                x_variation,
-                x_mutation,
-            )
+        x_values = [x for x in [x_variation, x_mutation, x_crossplay] if x is not None]
+        genotypes = jax.tree_util.tree_map(
+            lambda *x: jnp.concatenate(x, axis=0), *x_values
+        )
 
         return genotypes, random_key
 

@@ -129,7 +129,7 @@ class MAPElites:
             a new jax PRNG key
         """
         # generate offsprings with the emitter
-        genotypes, random_key = self._emitter.emit(
+        genotypes, random_key, operation_history = self._emitter.emit(
             repertoire, emitter_state, random_key
         )
         # scores the offsprings
@@ -138,7 +138,9 @@ class MAPElites:
         )
 
         # add genotypes in the repertoire
-        repertoire = repertoire.add(genotypes, descriptors, fitnesses, extra_scores)
+        repertoire, op_count = repertoire.add(
+            genotypes, descriptors, fitnesses, extra_scores, operation_history
+        )
 
         # update emitter state after scoring is made
         emitter_state = self._emitter.state_update(
@@ -152,6 +154,13 @@ class MAPElites:
 
         # update the metrics
         metrics = self._metrics_function(repertoire)
+        metrics.update(
+            {
+                "succ_var": op_count[0],
+                "succ_mut": op_count[1],
+                "succ_cross": op_count[2],
+            }
+        )
 
         return repertoire, emitter_state, metrics, random_key
 

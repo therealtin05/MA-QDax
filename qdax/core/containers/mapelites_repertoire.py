@@ -235,7 +235,8 @@ class MapElitesRepertoire(flax.struct.PyTreeNode):
         batch_of_descriptors: Descriptor,
         batch_of_fitnesses: Fitness,
         batch_of_extra_scores: Optional[ExtraScores] = None,
-    ) -> MapElitesRepertoire:
+        operation_history: Optional[jnp.ndarray] = None,
+    ) -> tuple[MapElitesRepertoire, Optional[jnp.ndarray]]:
         """
         Add a batch of elements to the repertoire.
 
@@ -281,6 +282,14 @@ class MapElitesRepertoire(flax.struct.PyTreeNode):
         )
         addition_condition = batch_of_fitnesses > current_fitnesses
 
+        # aggregate successful operations
+        op_count = None
+        if operation_history is not None:
+            operation_filtered = jnp.where(
+                addition_condition.squeeze(axis=-1), operation_history, 3
+            )
+            op_count = jnp.bincount(operation_filtered, length=3)
+
         # assign fake position when relevant : num_centroids is out of bound
         batch_of_indices = jnp.where(
             addition_condition, x=batch_of_indices, y=num_centroids
@@ -303,11 +312,14 @@ class MapElitesRepertoire(flax.struct.PyTreeNode):
             batch_of_descriptors
         )
 
-        return MapElitesRepertoire(
-            genotypes=new_repertoire_genotypes,
-            fitnesses=new_fitnesses,
-            descriptors=new_descriptors,
-            centroids=self.centroids,
+        return (
+            MapElitesRepertoire(
+                genotypes=new_repertoire_genotypes,
+                fitnesses=new_fitnesses,
+                descriptors=new_descriptors,
+                centroids=self.centroids,
+            ),
+            op_count,
         )
 
     @classmethod
@@ -354,7 +366,9 @@ class MapElitesRepertoire(flax.struct.PyTreeNode):
         repertoire = cls.init_default(genotype=first_genotype, centroids=centroids)
 
         # add initial population to the repertoire
-        new_repertoire = repertoire.add(genotypes, descriptors, fitnesses, extra_scores)
+        new_repertoire, _ = repertoire.add(
+            genotypes, descriptors, fitnesses, extra_scores
+        )
 
         return new_repertoire  # type: ignore
 

@@ -36,7 +36,7 @@ class NaiveMultiAgentMixingEmitter(Emitter):
         repertoire: Repertoire,
         emitter_state: Optional[EmitterState],
         random_key: RNGKey,
-    ) -> Tuple[Genotype, RNGKey, None]:
+    ) -> Tuple[Genotype, RNGKey, jnp.ndarray]:
         """
         Emitter that performs both mutation and variation. Two batches of
         variation_percentage * batch_size genotypes are sampled in the
@@ -94,7 +94,15 @@ class NaiveMultiAgentMixingEmitter(Emitter):
                 x_mutation,
             )
 
-        return genotypes, random_key, None
+        operation_history = jnp.concatenate(
+            [
+                jnp.zeros(n_variation, dtype=jnp.int32),
+                jnp.ones(n_mutation, dtype=jnp.int32),
+            ],
+            axis=0,
+        )
+
+        return genotypes, random_key, operation_history
 
     @property
     def batch_size(self) -> int:

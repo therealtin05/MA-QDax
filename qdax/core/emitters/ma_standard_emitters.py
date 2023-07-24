@@ -123,7 +123,7 @@ class MultiAgentEmitter(Emitter):
         batch_size: int,
         num_agents: int,
         role_preserving: bool = True,
-        agents_to_mutate: int = 1,
+        agents_to_mutate: int = -1,
         **kwargs: Dict,
     ) -> None:
         self._mutation_fn = mutation_fn
@@ -176,7 +176,11 @@ class MultiAgentEmitter(Emitter):
         x_variation = None
         x_mutation = None
         x_crossplay = None
-        agent_indices = random.sample(range(self._num_agents), self._agents_to_mutate)
+        agent_indices = (
+            random.sample(range(self._num_agents), self._agents_to_mutate)
+            if self._agents_to_mutate > 0
+            else range(self._num_agents)
+        )
 
         if n_variation > 0:
             x1, random_key = repertoire.sample(random_key, n_variation)

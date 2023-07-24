@@ -236,7 +236,8 @@ class MapElitesRepertoire(flax.struct.PyTreeNode):
         batch_of_fitnesses: Fitness,
         batch_of_extra_scores: Optional[ExtraScores] = None,
         operation_history: Optional[jnp.ndarray] = None,
-    ) -> tuple[MapElitesRepertoire, Optional[jnp.ndarray]]:
+        qd_offset: float = 0.0,
+    ) -> tuple[MapElitesRepertoire, dict[str, jnp.ndarray]]:
         """
         Add a batch of elements to the repertoire.
 
@@ -284,11 +285,25 @@ class MapElitesRepertoire(flax.struct.PyTreeNode):
 
         # aggregate successful operations
         op_count = None
+        fitness_improvement = None
         if operation_history is not None:
+            # Mark operations that were not successful
             operation_filtered = jnp.where(
                 addition_condition.squeeze(axis=-1), operation_history, 3
             )
+            # Get the number of times each operation was successful
             op_count = jnp.bincount(operation_filtered, length=3)
+            # Fitness delta
+            fitness_delta = jnp.nan_to_num(
+                batch_of_fitnesses - current_fitnesses,
+                posinf=qd_offset + batch_of_fitnesses,
+            ).squeeze(axis=-1)
+            # Get total fitness improvement by operation type
+            fitness_improvement = jnp.bincount(
+                operation_filtered,
+                weights=fitness_delta,
+                length=3,
+            )
 
         # assign fake position when relevant : num_centroids is out of bound
         batch_of_indices = jnp.where(
@@ -319,7 +334,7 @@ class MapElitesRepertoire(flax.struct.PyTreeNode):
                 descriptors=new_descriptors,
                 centroids=self.centroids,
             ),
-            op_count,
+            {"op_count": op_count, "fitness_improvement": fitness_improvement},
         )
 
     @classmethod

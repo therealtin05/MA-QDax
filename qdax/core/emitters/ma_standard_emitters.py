@@ -18,7 +18,7 @@ class NaiveMultiAgentMixingEmitter(Emitter):
         variation_percentage: float,
         batch_size: int,
         num_agents: int,
-        agents_to_mutate: int,
+        agents_to_mutate: int = -1,
     ) -> None:
         self._mutation_fn = mutation_fn
         self._variation_fn = variation_fn
@@ -58,8 +58,12 @@ class NaiveMultiAgentMixingEmitter(Emitter):
             a new jax PRNG key
         """
         # The indices of agents to not vary
-        agent_indices = random.sample(
-            range(self._num_agents), self._num_agents - self._agents_to_mutate
+        agent_indices = (
+            random.sample(
+                range(self._num_agents), self._num_agents - self._agents_to_mutate
+            )
+            if self._agents_to_mutate > 0
+            else []
         )
 
         n_variation = int(self._batch_size * self._variation_percentage)

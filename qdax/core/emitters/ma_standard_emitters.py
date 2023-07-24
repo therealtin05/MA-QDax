@@ -123,6 +123,7 @@ class MultiAgentEmitter(Emitter):
         batch_size: int,
         num_agents: int,
         role_preserving: bool = True,
+        agents_to_mutate: int = 1,
         **kwargs: Dict,
     ) -> None:
         self._mutation_fn = mutation_fn
@@ -132,6 +133,7 @@ class MultiAgentEmitter(Emitter):
         self._batch_size = batch_size
         self._num_agents = num_agents
         self._role_preserving = role_preserving
+        self._agents_to_mutate = agents_to_mutate
 
     @partial(
         jax.jit,
@@ -174,6 +176,7 @@ class MultiAgentEmitter(Emitter):
         x_variation = None
         x_mutation = None
         x_crossplay = None
+        agent_indices = random.sample(range(self._num_agents), self._agents_to_mutate)
 
         if n_variation > 0:
             x1, random_key = repertoire.sample(random_key, n_variation)
@@ -186,8 +189,8 @@ class MultiAgentEmitter(Emitter):
 
         if n_crossplay > 0:
             # TODO: this is not efficient, we should sample only once
-            x_crossplay = [None] * self._num_agents
-            for i in range(self._num_agents):
+            x_crossplay, random_key = repertoire.sample(random_key, n_crossplay)
+            for i in agent_indices:
                 x1, random_key = repertoire.sample(random_key, n_crossplay)
 
                 x_crossplay[i] = (

@@ -1,9 +1,13 @@
+import copy
 from typing import Dict
 
 import brax.envs
 import flax.struct
 import jax
 from brax import jumpy as jp
+from brax.envs import Env, Wrapper
+
+from qdax.environments.locomotion_wrappers import QDSystem
 
 
 class CompletedEvalMetrics(flax.struct.PyTreeNode):
@@ -71,3 +75,33 @@ class CompletedEvalWrapper(brax.envs.env.Wrapper):
         )
         nstate.info[self.STATE_INFO_KEY] = eval_metrics
         return nstate
+
+
+class GravityWrapper(Wrapper):
+    def __init__(self, env: Env, gravity_multiplier: float) -> None:
+        super().__init__(env)
+        self._gravity_multiplier = gravity_multiplier
+        config = copy.copy(self.env.sys.config)
+        config.gravity.z *= gravity_multiplier
+        self._config = config
+
+        self.unwrapped.sys = QDSystem(self._config)
+
+
+class ActuatorStrengthWrapper(Wrapper):
+    def __init__(
+        self, env: Env, actuator_name: str, strength_multiplier: float
+    ) -> None:
+        super().__init__(env)
+        self._actuator_name = actuator_name
+        self._strength_multiplier = strength_multiplier
+
+        config = copy.copy(self.env.sys.config)
+
+        actuators = config.actuators
+        for actuator in actuators:
+            if actuator.name == actuator_name:
+                actuator.strength *= strength_multiplier
+
+        self._config = config
+        self.unwrapped.sys = QDSystem(self._config)

@@ -666,6 +666,11 @@ def plot_multidimensional_map_elites_grid(
     # put solutions in the grid according to their projected 2-dimensional coordinates
     for desc, fit in zip(descriptors_integers, non_empty_fitnesses):
         projection_2d = _get_projection_in_2d(desc, grid_shape)
+        # Clip projected coordinates to avoid out of bounds errors
+        projection_2d = (
+            jnp.clip(projection_2d[0], 0, size_grid_x - 1),
+            jnp.clip(projection_2d[1], 0, size_grid_y - 1),
+        )
         if jnp.isnan(grid_2d[projection_2d]) or fit.item() > grid_2d[projection_2d]:
             grid_2d[projection_2d] = fit.item()
 

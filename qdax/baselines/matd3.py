@@ -232,7 +232,7 @@ class MATD3:
         )
         next_env_state = env.step(env_state, actions)
 
-        flatten_action = jnp.concat([a for a in actions.values()])
+        flatten_action = jnp.concatenate([a for a in actions.values()])
 
         transition = Transition(
             obs=env_state.obs,

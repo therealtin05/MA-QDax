@@ -140,7 +140,7 @@ def make_matd3_loss_fn(
             a = (a + noise).clip(-1.0, 1.0)
             next_actions[agent_idx] = a
 
-        flatten_next_actions = jnp.concat([a for a in next_actions.values()], axis=-1)
+        flatten_next_actions = jnp.concatenate([a for a in next_actions.values()], axis=-1)
 
         next_q = critic_fn(  # type: ignore
             target_critic_params, obs=transitions.next_obs, actions=flatten_next_actions
@@ -283,7 +283,7 @@ def matd3_critic_loss_fn(
         a = (a + noise).clip(-1.0, 1.0)
         next_actions[agent_idx] = a
 
-    flatten_next_actions = jnp.concat([a for a in next_actions.values()], axis=-1)
+    flatten_next_actions = jnp.concatenate([a for a in next_actions.values()], axis=-1)
 
     next_q = critic_fn(  # type: ignore
         target_critic_params, obs=transitions.next_obs, actions=flatten_next_actions

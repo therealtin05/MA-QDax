@@ -684,7 +684,7 @@ class QualityMAPGEmitter(Emitter):
     @partial(jax.jit, static_argnames=("self"))
     def unflatten_actions_fn(self, flatten_action: jnp.ndarray) -> dict[int, jax.Array]:
         """Because the actions in the form of Dict[int, jnp.array] is flatten by 
-        flatten_actions = jnp.concat([a for a in actions.values()]) so we do this way
+        flatten_actions = jnp.concatenate([a for a in actions.values()]) so we do this way
         """
 
         actions = {}

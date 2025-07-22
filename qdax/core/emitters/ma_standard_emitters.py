@@ -135,7 +135,7 @@ class MultiAgentEmitter(Emitter):
         self._variation_percentage = variation_percentage
         self._crossplay_percentage = crossplay_percentage
         self._batch_size = batch_size
-        self._num_agents = num_agents
+        self._num_agents = num_agents # number of multiagent (2 for walker2d)
         self._role_preserving = role_preserving
         self._agents_to_mutate = agents_to_mutate
 
@@ -197,7 +197,20 @@ class MultiAgentEmitter(Emitter):
 
         if n_crossplay > 0:
             # TODO: this is not efficient, we should sample only once
+
+            # In the current setting self._agents_to_mutate=1 preserve_role=True, which means we only change
+            # n_crossplay random i-th subagents with n_crossplay i-th random subagents in the repertoire
+
             x_crossplay, random_key = repertoire.sample(random_key, n_crossplay)
+
+            # for i in agent_indices:         
+            #     random_key, subkey = jax.random.split(random_key)
+            #     indices = jax.random.randint(subkey, (n_crossplay, ), minval=0, maxval=n_crossplay)
+            #     x_crossplay[i] = jax.tree_util.tree_map(
+            #         lambda x: x[indices],
+            #         x_crossplay[i]
+            #     )
+            
             for i in agent_indices:
                 x1, random_key = repertoire.sample(random_key, n_crossplay)
 

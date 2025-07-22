@@ -2,14 +2,14 @@ import functools
 from functools import partial
 from typing import Callable, Optional, Tuple
 
-import brax.envs
+import brax.v1.envs
 import flax.linen as nn
 import jax
 import jax.numpy as jnp
 
 import qdax.environments
 from qdax import environments
-from qdax.core.neuroevolution.buffers.buffer import QDTransition
+from qdax.core.neuroevolution.buffers.buffer import QDTransition, Transition
 from qdax.core.neuroevolution.mdp_utils import generate_unroll
 from qdax.core.neuroevolution.networks.networks import MLP
 from qdax.types import (
@@ -24,7 +24,7 @@ from qdax.types import (
 
 
 def make_policy_network_play_step_fn_brax(
-    env: brax.envs.Env,
+    env: brax.v1.envs.Env,
     policy_network: nn.Module,
 ) -> Callable[
     [EnvState, Params, RNGKey], Tuple[EnvState, Params, RNGKey, QDTransition]
@@ -216,9 +216,112 @@ def reset_based_scoring_function_brax_envs(
 
     return fitnesses, descriptors, extra_scores, random_key
 
+def get_mask_from_transitions(
+    data: Transition,
+) -> jnp.ndarray:
+    is_done = jnp.clip(jnp.cumsum(data.dones, axis=1), 0, 1)
+    mask = jnp.roll(is_done, 1, axis=1)
+    mask = mask.at[:, 0].set(0)
+    return mask
+
+
+def reset_based_scoring_function_brax_envs_multiple_runs(
+    policies_params: Genotype,
+    random_key: RNGKey,
+    episode_length: int,
+    play_reset_fn: Callable[[RNGKey], EnvState],
+    play_step_fn: Callable[
+        [EnvState, Params, RNGKey], Tuple[EnvState, Params, RNGKey, QDTransition]
+    ],
+    behavior_descriptor_extractor: Callable[[QDTransition, jnp.ndarray], Descriptor],
+    n_runs: int = 5,
+) -> Tuple[Fitness, Descriptor, ExtraScores, RNGKey]:
+    """Evaluates policies in policies_params over multiple runs in parallel, using a reset function.
+    The play_reset_fn allows for flexible batch sizes and stochastic or deterministic environments.
+
+    To define stochastic environments, use 'play_reset_fn = env.reset'.
+    For deterministic environments, generate an init_state with 'init_state = env.reset(random_key)',
+    then use 'play_reset_fn = lambda random_key: init_state'.
+
+    Args:
+        policies_params: Parameters of closed-loop controllers/policies to evaluate.
+        random_key: Jax random key.
+        episode_length: Maximal rollout length.
+        play_reset_fn: Function to reset the environment and obtain initial states.
+        play_step_fn: Function to play a step of the environment.
+        behavior_descriptor_extractor: Function to extract behavior descriptors.
+        n_runs: Number of evaluation runs per policy (default: 5).
+
+    Returns:
+        fitness: Array of mean fitnesses across runs for all evaluated policies.
+        descriptor: Mean behavioral descriptors across runs for all policies.
+        extra_scores: Additional information from the evaluation.
+        random_key: Updated random key.
+    """
+    num_policies = jax.tree_util.tree_leaves(policies_params)[0].shape[0]
+    total_evals = num_policies * n_runs
+
+    # Repeat policies n_runs times
+    policies_params_repeated = jax.tree_util.tree_map(
+        lambda x: jnp.repeat(x, repeats=n_runs, axis=0),
+        policies_params
+    )
+
+    # Generate random keys for all rollouts plus one extra key
+    random_key, subkey = jax.random.split(random_key)
+    all_keys = jax.random.split(subkey, num=total_evals)
+    keys = all_keys.reshape((num_policies, n_runs, -1))
+
+    # Vectorize reset function and apply to all keys
+    reset_fn = jax.vmap(play_reset_fn)
+    init_states = jax.vmap(lambda k: reset_fn(k))(keys)  # Shape: (num_policies, n_runs, ...)
+
+    # Flatten init_states and keys for vmap
+    init_states_flat = jax.tree_util.tree_map(
+        lambda x: x.reshape((total_evals,) + x.shape[2:]), init_states
+    )
+    keys_flat = keys.reshape((total_evals,) + keys.shape[2:])
+
+    # Unroll function for a single rollout
+    def single_rollout(init_state, params, key):
+        return generate_unroll(
+            init_state=init_state,
+            policy_params=params,
+            episode_length=episode_length,
+            play_step_fn=play_step_fn,
+            random_key=key,
+        )
+
+    # Vectorize over all rollouts
+    final_states, data = jax.vmap(single_rollout)(
+        init_states_flat, policies_params_repeated, keys_flat
+    )
+
+    # Get masks
+    mask = get_mask_from_transitions(data)
+
+    # Compute fitness
+    fitnesses = jnp.sum(data.rewards * (1.0 - mask), axis=1)
+
+    # Reshape and average over runs
+    fitnesses = fitnesses.reshape((num_policies, n_runs))
+    fitnesses_mean = jnp.mean(fitnesses, axis=1)
+
+    # Compute descriptors and average
+    descriptors = behavior_descriptor_extractor(data, mask)
+    descriptors = descriptors.reshape((num_policies, n_runs, -1))
+    descriptors_mean = jnp.mean(descriptors, axis=1)
+
+    return (
+        fitnesses_mean,
+        descriptors_mean,
+        {"transitions": data},
+        random_key,
+    )
+
 
 def create_brax_scoring_fn(
-    env: brax.envs.Env,
+    env: brax.v1.envs.Env,
     policy_network: nn.Module,
     bd_extraction_fn: Callable[[QDTransition, jnp.ndarray], Descriptor],
     random_key: RNGKey,
@@ -294,7 +397,7 @@ def create_default_brax_task_components(
     mlp_policy_hidden_layer_sizes: Tuple[int, ...] = (64, 64),
     deterministic: bool = True,
 ) -> Tuple[
-    brax.envs.Env,
+    brax.v1.envs.Env,
     MLP,
     Callable[[Genotype, RNGKey], Tuple[Fitness, Descriptor, ExtraScores, RNGKey]],
     RNGKey,

@@ -9,8 +9,8 @@ from typing import Any, Callable, Tuple
 
 import jax
 import optax
-from brax.envs import Env
-from brax.envs import State as EnvState
+from brax.v1.envs import Env
+from brax.v1.envs import State as EnvState
 from jax import numpy as jnp
 
 from qdax.baselines.pbt import PBTTrainingState

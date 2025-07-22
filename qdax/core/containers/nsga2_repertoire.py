@@ -228,7 +228,7 @@ class NSGA2Repertoire(GARepertoire):
 
         # get rid of the zeros (that correspond to the False from the mask)
         fake_indice = num_candidates + 1  # bigger than all the other indices
-        indices = jnp.where(indices == 0, x=fake_indice, y=indices)
+        indices = jnp.where(indices == 0, fake_indice, indices)
 
         # sort the indices to remove the fake indices
         indices = jnp.sort(indices)[: self.size]

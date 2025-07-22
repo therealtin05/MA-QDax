@@ -1,10 +1,10 @@
 from typing import Any, Tuple
 
 import brax
-import brax.envs
+import brax.v1.envs
 import jax
 import pytest
-from brax import jumpy as jp
+from brax.v1 import jumpy as jp
 
 import qdax
 from qdax.environments.pointmaze import PointMaze
@@ -15,7 +15,7 @@ def test_pointmaze() -> None:
     # create env with class
     qd_env = PointMaze()
     # verify class
-    pytest.assume(isinstance(qd_env, brax.envs.Env))
+    pytest.assume(isinstance(qd_env, brax.v1.envs.env))
 
     # check state_descriptor_length
     pytest.assume(qd_env.state_descriptor_length == 2)
@@ -25,7 +25,7 @@ def test_pointmaze() -> None:
     qd_env = qdax.environments.create(env_name="pointmaze")  # type: ignore
 
     # verify class
-    pytest.assume(isinstance(qd_env, brax.envs.Env))
+    pytest.assume(isinstance(qd_env, brax.v1.envs.env))
 
     # check state_descriptor_length
     pytest.assume(qd_env.state_descriptor_length == 2)

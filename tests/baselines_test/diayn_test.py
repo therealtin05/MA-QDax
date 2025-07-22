@@ -6,7 +6,7 @@ from typing import Any, Tuple
 import jax
 import jax.numpy as jnp
 import pytest
-from brax.envs import State as EnvState
+from brax.v1.envs import State as EnvState
 
 from qdax import environments
 from qdax.baselines.diayn import DIAYN, DiaynConfig, DiaynTrainingState

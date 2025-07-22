@@ -7,8 +7,8 @@ from typing import Callable, Tuple
 
 import jax
 import optax
-from brax.envs import Env
-from brax.envs import State as EnvState
+from brax.v1.envs import Env
+from brax.v1.envs import State as EnvState
 from jax import numpy as jnp
 
 from qdax.core.neuroevolution.buffers.buffer import (
@@ -23,7 +23,7 @@ from qdax.core.neuroevolution.losses.td3_loss import (
 from qdax.core.neuroevolution.mdp_utils import TrainingState, get_first_episode
 from qdax.core.neuroevolution.networks.td3_networks import make_td3_networks
 from qdax.core.neuroevolution.sac_td3_utils import generate_unroll
-from qdax.types import (
+from qdax.custom_types import (
     Action,
     Descriptor,
     Mask,

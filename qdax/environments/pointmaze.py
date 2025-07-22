@@ -1,8 +1,8 @@
 from typing import Any, Dict, List, Tuple, Union
 
 import brax
-from brax import jumpy as jp
-from brax.envs import env
+from brax.v1 import jumpy as jp
+from brax.v1.envs import env
 
 
 class PointMaze(env.Env):
@@ -12,7 +12,7 @@ class PointMaze(env.Env):
 
     In order to stay in the Brax API, I will use a fake QP
     at several moment of the implementation. This enable to
-    use the brax.envs.env.State from Brax. To avoid this,
+    use the brax.v1.envs.env.State from Brax. To avoid this,
     it would be good to ask Brax to enlarge a bit their API
     for environments that are not physically simulated.
     """

@@ -1,11 +1,11 @@
 from typing import Any, List, Optional, Sequence, Tuple
 
 import jax.numpy as jnp
-from brax import jumpy as jp
-from brax.envs import Env, State, Wrapper
-from brax.physics import config_pb2
-from brax.physics.base import QP, Info
-from brax.physics.system import System
+from brax.v1 import jumpy as jp
+from brax.v1.envs import Env, State, Wrapper
+from brax.v1.physics import config_pb2
+from brax.v1.physics.base import QP, Info
+from brax.v1.physics.system import System
 
 from qdax.environments.base_wrappers import QDEnv
 
@@ -57,7 +57,7 @@ class FeetContactWrapper(QDEnv):
     Example :
 
         from brax import envs
-        from brax import jumpy as jp
+        from brax.v1 import jumpy as jp
 
         # choose in ["ant", "walker2d", "hopper", "halfcheetah"]
         ENV_NAME = "ant"
@@ -179,7 +179,7 @@ class XYPositionWrapper(QDEnv):
     Example :
 
         from brax import envs
-        from brax import jumpy as jp
+        from brax.v1 import jumpy as jp
 
         # choose in ["ant", "walker2d", "hopper", "halfcheetah", "humanoid"]
         ENV_NAME = "ant"
@@ -303,7 +303,7 @@ class NoForwardRewardWrapper(Wrapper):
     Example :
 
         from brax import envs
-        from brax import jumpy as jp
+        from brax.v1 import jumpy as jp
 
         # choose in ["ant", "walker2d", "hopper", "halfcheetah", "humanoid"]
         ENV_NAME = "ant"

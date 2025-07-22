@@ -43,7 +43,7 @@ def test_cma_me(emitter_type: Type[CMAEmitter]) -> None:
 
     def clip(x: jnp.ndarray) -> jnp.ndarray:
         in_bound = (x <= maxval) * (x >= minval)
-        return jnp.where(condition=in_bound, x=x, y=(maxval / x))
+        return jnp.where(in_bound, x, (maxval / x))
 
     def _behavior_descriptor_1(x: jnp.ndarray) -> jnp.ndarray:
         return jnp.sum(clip(x[: x.shape[-1] // 2]))

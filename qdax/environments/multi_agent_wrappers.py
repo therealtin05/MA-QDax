@@ -1,8 +1,9 @@
 from typing import Any, Dict, List, Tuple, Union
 
+import jax
 import jax.numpy as jnp
-from brax import jumpy as jp
-from brax.envs import Env, State, Wrapper
+from brax.v1 import jumpy as jp
+from brax.v1.envs import Env, State, Wrapper
 
 _agent_action_mapping = {
     "walker2d": {
@@ -80,7 +81,7 @@ ranges: Dict[str, Dict[int, List[Union[int, Tuple[int, int]]]]] = {
             (269, 274),
             (278, 285),
             (316, 351),
-        ],
+        ], 
     },
     "halfcheetah": {
         0: [(1, 2), 3, 4, 6, (9, 11), 12],
@@ -139,6 +140,7 @@ class MultiAgentBraxWrapper(Wrapper):
                 return {
                     k: self.env.observation_size for k in self.agent_obs_mapping.keys()
                 }
+        # jax.debug.print('If you see this, we are not using shared pool')
         return {k: v.size for k, v in self.agent_obs_mapping.items()}
 
     def get_action_sizes(self) -> Dict[int, int]:

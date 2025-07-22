@@ -2,7 +2,7 @@
 
 from typing import Dict, Generic, TypeVar, Union
 
-import brax.envs
+import brax.v1.envs
 import jax
 import jax.numpy as jnp
 import jumanji
@@ -17,7 +17,7 @@ Observation: TypeAlias = jnp.ndarray
 Action: TypeAlias = jnp.ndarray
 Reward: TypeAlias = jnp.ndarray
 Done: TypeAlias = jnp.ndarray
-EnvState: TypeAlias = brax.envs.State
+EnvState: TypeAlias = brax.v1.envs.State
 Params: TypeAlias = ArrayTree
 
 # Evolution types
@@ -44,5 +44,5 @@ class ParetoFront(Generic[T]):
 Mask: TypeAlias = jnp.ndarray
 
 # Others
-RNGKey: TypeAlias = jax.random.KeyArray
+RNGKey: TypeAlias = jax.random.PRNGKey
 Metrics: TypeAlias = Dict[str, jnp.ndarray]

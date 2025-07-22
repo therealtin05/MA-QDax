@@ -10,7 +10,7 @@ from functools import partial
 from typing import Any, Callable, Tuple
 
 import jax
-from brax.envs import State as EnvState
+from brax.v1.envs import State as EnvState
 
 from qdax.core.neuroevolution.buffers.buffer import ReplayBuffer, Transition
 from qdax.core.neuroevolution.mdp_utils import TrainingState

@@ -1,11 +1,11 @@
 import copy
 from typing import Dict
 
-import brax.envs
+import brax.v1.envs
 import flax.struct
 import jax
-from brax import jumpy as jp
-from brax.envs import Env, Wrapper
+from brax.v1 import jumpy as jp
+from brax.v1.envs import Env, Wrapper
 
 from qdax.environments.locomotion_wrappers import QDSystem
 
@@ -17,12 +17,12 @@ class CompletedEvalMetrics(flax.struct.PyTreeNode):
     completed_episodes_steps: jp.ndarray
 
 
-class CompletedEvalWrapper(brax.envs.env.Wrapper):
+class CompletedEvalWrapper(brax.v1.envs.env.Wrapper):
     """Brax env with eval metrics for completed episodes."""
 
     STATE_INFO_KEY = "completed_eval_metrics"
 
-    def reset(self, rng: jp.ndarray) -> brax.envs.env.State:
+    def reset(self, rng: jp.ndarray) -> brax.v1.envs.env.State:
         reset_state = self.env.reset(rng)
         reset_state.metrics["reward"] = reset_state.reward
         eval_metrics = CompletedEvalMetrics(
@@ -39,8 +39,8 @@ class CompletedEvalWrapper(brax.envs.env.Wrapper):
         return reset_state
 
     def step(
-        self, state: brax.envs.env.State, action: jp.ndarray
-    ) -> brax.envs.env.State:
+        self, state: brax.v1.envs.env.State, action: jp.ndarray
+    ) -> brax.v1.envs.env.State:
         state_metrics = state.info[self.STATE_INFO_KEY]
         if not isinstance(state_metrics, CompletedEvalMetrics):
             raise ValueError(f"Incorrect type for state_metrics: {type(state_metrics)}")

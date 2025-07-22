@@ -32,7 +32,7 @@ from qdax.core.neuroevolution.normalization_utils import (
     update_running_mean_std,
 )
 from qdax.core.neuroevolution.sac_td3_utils import generate_unroll
-from qdax.types import (
+from qdax.custom_types import (
     Action,
     Descriptor,
     Mask,
@@ -71,7 +71,8 @@ class SacConfig:
     alpha_init: float = 1.0
     discount: float = 0.97
     reward_scaling: float = 1.0
-    hidden_layer_sizes: tuple = (256, 256)
+    critic_hidden_layer_size: tuple = (256, 256)
+    policy_hidden_layer_size: tuple = (256, 256)
     fix_alpha: bool = False
 
 
@@ -82,7 +83,9 @@ class SAC:
 
         # define the networks
         self._policy, self._critic = make_sac_networks(
-            action_size=action_size, hidden_layer_sizes=self._config.hidden_layer_sizes
+            action_size=action_size,
+            critic_hidden_layer_size=self._config.critic_hidden_layer_size,
+            policy_hidden_layer_size=self._config.policy_hidden_layer_size,
         )
 
         # define the action distribution
@@ -178,7 +181,7 @@ class SAC:
             actions = self._sample_action_fn(dist_params, key_sample)
 
         else:
-            # The first half of parameters is for mean and the second half for variance
+            # The first half of parameters is for mean and the second half for ariance
             actions = jax.nn.tanh(dist_params[..., : dist_params.shape[-1] // 2])
 
         return actions, random_key
@@ -260,6 +263,8 @@ class SAC:
             training_state,
             transition,
         )
+
+
 
     @partial(jax.jit, static_argnames=("self", "env", "deterministic", "evaluation"))
     def play_qd_step_fn(
@@ -446,7 +451,10 @@ class SAC:
                 random_key=subkey,
             )
             alpha_optimizer = optax.adam(learning_rate=alpha_lr)
-            (alpha_updates, alpha_optimizer_state,) = alpha_optimizer.update(
+            (
+                alpha_updates,
+                alpha_optimizer_state,
+            ) = alpha_optimizer.update(
                 alpha_gradient, training_state.alpha_optimizer_state
             )
             alpha_params = optax.apply_updates(
@@ -500,7 +508,10 @@ class SAC:
             random_key=subkey,
         )
         critic_optimizer = optax.adam(learning_rate=critic_lr)
-        (critic_updates, critic_optimizer_state,) = critic_optimizer.update(
+        (
+            critic_updates,
+            critic_optimizer_state,
+        ) = critic_optimizer.update(
             critic_gradient, training_state.critic_optimizer_state
         )
         critic_params = optax.apply_updates(
@@ -553,7 +564,10 @@ class SAC:
             random_key=subkey,
         )
         policy_optimizer = optax.adam(learning_rate=policy_lr)
-        (policy_updates, policy_optimizer_state,) = policy_optimizer.update(
+        (
+            policy_updates,
+            policy_optimizer_state,
+        ) = policy_optimizer.update(
             policy_gradient, training_state.policy_optimizer_state
         )
         policy_params = optax.apply_updates(

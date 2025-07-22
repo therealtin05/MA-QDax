@@ -226,6 +226,13 @@ class MapElitesRepertoire(flax.struct.PyTreeNode):
             self.genotypes,
         )
 
+        # jax.debug.print("Is samples a list? {b}", b=int(isinstance(samples, list)))
+        # jax.debug.print("List length {l} (predicted for Walker2d is 2)", l=len(samples))
+        # jax.tree_util.tree_map(
+        #     lambda x: jax.debug.print("Samples Param shape {shape}", shape=x.shape),
+        #     samples
+        # )
+
         return samples, random_key
 
     @jax.jit
@@ -273,7 +280,7 @@ class MapElitesRepertoire(flax.struct.PyTreeNode):
 
         # put dominated fitness to -jnp.inf
         batch_of_fitnesses = jnp.where(
-            batch_of_fitnesses == cond_values, x=batch_of_fitnesses, y=-jnp.inf
+            batch_of_fitnesses == cond_values, batch_of_fitnesses, -jnp.inf
         )
 
         # get addition condition
@@ -307,7 +314,7 @@ class MapElitesRepertoire(flax.struct.PyTreeNode):
 
         # assign fake position when relevant : num_centroids is out of bound
         batch_of_indices = jnp.where(
-            addition_condition, x=batch_of_indices, y=num_centroids
+            addition_condition, batch_of_indices, num_centroids
         )
 
         # create new repertoire
@@ -414,11 +421,27 @@ class MapElitesRepertoire(flax.struct.PyTreeNode):
         # default fitness is -inf
         default_fitnesses = -jnp.inf * jnp.ones(shape=num_centroids)
 
+        # jax.debug.print('genotypes type {t} (suspect it is list)', t=int(isinstance(genotype, list)))
+        # jax.debug.print('length of genotype list {l}', l=len(genotype))
+
+        # jax.tree_util.tree_map(
+        #     lambda x: jax.debug.print("Parameter shape {shape}", shape=x.shape),
+        #     genotype
+        # )
+
         # default genotypes is all 0
         default_genotypes = jax.tree_util.tree_map(
             lambda x: jnp.zeros(shape=(num_centroids,) + x.shape, dtype=x.dtype),
             genotype,
         )
+
+        # jax.debug.print('default_genotypes type {t} (suspect it is list)', t=int(isinstance(default_genotypes[0], list)))
+        # jax.debug.print('length of default genotype list {l}', l=len(default_genotypes))
+
+        # jax.tree_util.tree_map(
+        #     lambda x: jax.debug.print("Default genotype parameter shape {shape}", shape=x.shape),
+        #     default_genotypes[0]
+        # )
 
         # default descriptor is all zeros
         default_descriptors = jnp.zeros_like(centroids)

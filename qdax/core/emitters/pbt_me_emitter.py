@@ -2,7 +2,7 @@ from functools import partial
 from typing import Callable, Optional, Tuple, Union
 
 import jax
-from brax.envs import State as EnvState
+from brax.v1.envs import State as EnvState
 from flax.struct import PyTreeNode
 from jax import numpy as jnp
 

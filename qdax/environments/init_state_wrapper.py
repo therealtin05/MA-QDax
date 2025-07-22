@@ -1,8 +1,8 @@
 from typing import Callable, Optional
 
-import brax
-from brax import jumpy as jp
-from brax.envs import Env, State, Wrapper
+import brax.v1 as brax
+from brax.v1 import jumpy as jp
+from brax.v1.envs import Env, State, Wrapper
 
 
 class FixedInitialStateWrapper(Wrapper):

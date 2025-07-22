@@ -2,8 +2,8 @@ import warnings
 
 import brax
 import jax.numpy as jnp
-from brax import jumpy as jp
-from brax.envs import State, env
+from brax.v1 import jumpy as jp
+from brax.v1.envs import State, env
 from google.protobuf import text_format  # type: ignore
 
 from qdax.environments.locomotion_wrappers import COG_NAMES
@@ -88,11 +88,11 @@ collide_include {
 # storing the classic env configurations
 # those are the configs from the official brax repo
 ENV_SYSTEM_CONFIG = {
-    "ant": brax.envs.ant._SYSTEM_CONFIG,
-    "halfcheetah": brax.envs.half_cheetah._SYSTEM_CONFIG,
-    "walker2d": brax.envs.walker2d._SYSTEM_CONFIG,
-    "hopper": brax.envs.hopper._SYSTEM_CONFIG,
-    # "humanoid": brax.envs.humanoid._SYSTEM_CONFIG,
+    "ant": brax.v1.envs.ant._SYSTEM_CONFIG,
+    "halfcheetah": brax.v1.envs.half_cheetah._SYSTEM_CONFIG,
+    "walker2d": brax.v1.envs.walker2d._SYSTEM_CONFIG,
+    "hopper": brax.v1.envs.hopper._SYSTEM_CONFIG,
+    # "humanoid": brax.v1.envs.humanoid._SYSTEM_CONFIG,
 }
 
 # linking each env with its specific collision description
@@ -128,7 +128,7 @@ class TrapWrapper(env.Wrapper):
     Example :
 
         from brax import envs
-        from brax import jumpy as jp
+        from brax.v1 import jumpy as jp
 
         # choose in ["ant"]
         ENV_NAME = "ant"
@@ -349,7 +349,7 @@ class MazeWrapper(env.Wrapper):
     Example :
 
         from brax import envs
-        from brax import jumpy as jp
+        from brax.v1 import jumpy as jp
 
         # choose in ["ant"]
         ENV_NAME = "ant"

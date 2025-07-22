@@ -113,7 +113,7 @@ class MultiEmitter(Emitter):
             emitter_state.emitter_states,
             subkeys,
         ):
-            genotype, _ = emitter.emit(repertoire, sub_emitter_state, subkey_emitter)
+            genotype, _, _ = emitter.emit(repertoire, sub_emitter_state, subkey_emitter)
             batch_size = jax.tree_util.tree_leaves(genotype)[0].shape[0]
             assert batch_size == emitter.batch_size
             all_offsprings.append(genotype)
@@ -122,7 +122,7 @@ class MultiEmitter(Emitter):
         offsprings = jax.tree_util.tree_map(
             lambda *x: jnp.concatenate(x, axis=0), *all_offsprings
         )
-        return offsprings, random_key
+        return offsprings, random_key, jnp.array(0)
 
     @partial(jax.jit, static_argnames=("self",))
     def state_update(

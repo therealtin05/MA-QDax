@@ -3,7 +3,7 @@ from typing import Any, Tuple
 
 import jax
 import pytest
-from brax.envs import State as EnvState
+from brax.v1.envs import State as EnvState
 
 from qdax import environments
 from qdax.baselines.td3 import TD3, TD3Config, TD3TrainingState

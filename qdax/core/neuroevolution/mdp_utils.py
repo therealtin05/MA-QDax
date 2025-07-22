@@ -1,11 +1,11 @@
 from functools import partial
 from typing import Any, Callable, Tuple
 
-import brax.envs
+import brax.v1.envs
 import flax.linen as nn
 import jax
 import jax.numpy as jnp
-from brax.envs import State as EnvState
+from brax.v1.envs import State as EnvState
 from flax.struct import PyTreeNode
 
 from qdax.core.neuroevolution.buffers.buffer import Transition
@@ -85,7 +85,7 @@ def get_first_episode(transition: Transition) -> Transition:
 
 def init_population_controllers(
     policy_network: nn.Module,
-    env: brax.envs.Env,
+    env: brax.v1.envs.env,
     batch_size: int,
     random_key: RNGKey,
 ) -> Tuple[Genotype, RNGKey]:

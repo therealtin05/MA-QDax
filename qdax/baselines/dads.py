@@ -10,8 +10,8 @@ from typing import Callable, Tuple
 import jax
 import jax.numpy as jnp
 import optax
-from brax.envs import Env
-from brax.envs import State as EnvState
+from brax.v1.envs import Env
+from brax.v1.envs import State as EnvState
 from brax.training.distribution import NormalTanhDistribution
 
 from qdax.baselines.sac import SAC, SacConfig

@@ -32,7 +32,7 @@ setup(
         "numpy==1.24.1",
         "optax==0.1.9",
         "scikit-learn>=1.0.2",
-        "scipy==1.9.0",
+        "scipy==1.10.0",
     ],
     dependency_links=[
         "https://storage.googleapis.com/jax-releases/jax_releases.html",

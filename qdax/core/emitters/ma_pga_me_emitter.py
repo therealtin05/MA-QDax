@@ -6,7 +6,7 @@ import flax.linen as nn
 
 from qdax.core.emitters.multi_emitter import MultiEmitter
 from qdax.core.emitters.ma_qpg_emitter import QualityMAPGConfig, QualityMAPGEmitter
-from qdax.core.emitters.ma_standard_emitters import NaiveMultiAgentMixingEmitter, MultiAgentEmitter
+from qdax.core.emitters.ma_standard_emitters import NaiveMultiAgentMixingEmitter, MultiAgentEmitter, ProximalMultiAgentEmitter
 from qdax.environments.multi_agent_wrappers import MultiAgentBraxWrapper
 from qdax.types import Params, RNGKey
 from qdax.core.emitters.mutation_operators import isoline_variation, polynomial_mutation
@@ -96,6 +96,20 @@ class MAPGAMEEmitter(MultiEmitter):
                 agents_to_mutate=self._config.agents_to_mutate
             )
 
+        elif self._config.emitter_type == "safe_mut":
+            ga_emitter = ProximalMultiAgentEmitter(
+                mutation_fn=mutation_fn,
+                variation_fn=variation_fn,
+                variation_percentage=self._config.variation_percentage,
+                crossplay_percentage=self._config.crossplay_percentage,
+                batch_size=ga_batch_size,
+                num_agents=len(policy_network),
+                role_preserving=True,
+                agents_to_mutate=self._config.agents_to_mutate,
+                env=env,
+                policy_network=policy_network
+            )
+
         else:
             # define the GA emitter
             ga_emitter = MultiAgentEmitter(
@@ -108,5 +122,5 @@ class MAPGAMEEmitter(MultiEmitter):
                 role_preserving=True,
                 agents_to_mutate=self._config.agents_to_mutate
             ) 
-
+            
         super().__init__(emitters=(q_emitter, ga_emitter))

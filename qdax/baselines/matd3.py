@@ -16,6 +16,7 @@ from qdax.core.neuroevolution.mdp_utils import TrainingState, get_first_episode
 from qdax.core.neuroevolution.losses.matd3_loss import (
     matd3_critic_loss_fn,
     matd3_policy_loss_fn,
+    matd3_policy_loss_fn_v2
 )
 from qdax.core.neuroevolution.sac_td3_utils import generate_unroll
 from qdax.custom_types import (
@@ -66,7 +67,7 @@ class MATD3Config:
     noise_clip: float = 0.5
     policy_noise: float = 0.2
     reward_scaling: float = 1.0
-
+    max_grad_norm: float = 30.0
 
 
 class MATD3:
@@ -127,13 +128,17 @@ class MATD3:
         target_policy_params = jax.tree_util.tree_map(
             lambda x: jnp.asarray(x.copy()), policy_params
         )
+        
+        grad_clip = optax.clip_by_global_norm(self._config.max_grad_norm)
 
         # Create and initialize optimizers
-        critic_optimizer_state = optax.adam(learning_rate=1.0).init(critic_params)
+        critic_optimizer_state = optax.chain(grad_clip, 
+                                             optax.adam(learning_rate=1.0)).init(critic_params)
 
         policy_optimizer_state = []
         for agent_idx, params in enumerate(policy_params):
-            policy_optimizer_state.append(optax.adam(learning_rate=1.0).init(params))
+            policy_optimizer_state.append(optax.chain(grad_clip, 
+                                                      optax.adam(learning_rate=1.0)).init(params))
 
         # Initial training state
         training_state = MATD3TrainingState(
@@ -387,13 +392,17 @@ class MATD3:
         mean_bd = jnp.mean(bds, axis=0)
         return true_return, mean_bd, true_returns, bds
 
-    @partial(jax.jit, static_argnames=("self", "unflatten_obs_fn"))
+    @partial(jax.jit, static_argnames=("self", "unflatten_obs_fn", "unflatten_actions_fn"))
     # Update the MATD3.update method to use the new approach
     def update(
         self,
         training_state: MATD3TrainingState,
         replay_buffer: ReplayBuffer,
         unflatten_obs_fn: Callable[
+            [Observation],
+            dict[int, jnp.ndarray]
+        ],
+        unflatten_actions_fn: Callable[
             [Observation],
             dict[int, jnp.ndarray]
         ],
@@ -407,7 +416,8 @@ class MATD3:
         )
 
         unflatten_obs_fn_vmap = jax.vmap(unflatten_obs_fn)
-        
+        unflatten_actions_fn_vmap = jax.vmap(unflatten_actions_fn)
+
         # Create the policy_fns_apply function (this should be created once and reused)
         def create_policy_fns(index, params, obs):
             return jax.lax.switch(index, [pol.apply for pol in self._policy.values()], params, obs)
@@ -432,7 +442,9 @@ class MATD3:
         )
         
         # ... rest of critic update code remains the same ...
-        critic_optimizer = optax.adam(learning_rate=self._config.critic_learning_rate)
+        grad_clip = optax.clip_by_global_norm(self._config.max_grad_norm)
+        critic_optimizer = optax.chain(grad_clip, 
+                                       optax.adam(learning_rate=self._config.critic_learning_rate))
         critic_updates, critic_optimizer_state = critic_optimizer.update(
             critic_gradient, training_state.critic_optimizer_state
         )
@@ -449,12 +461,13 @@ class MATD3:
         )
 
         # Update policy
-        policy_losses, policy_gradients = matd3_policy_loss_fn(
+        policy_losses, policy_gradients = matd3_policy_loss_fn_v2(
             policy_params=training_state.policy_params,
             critic_params=training_state.critic_params,
             policy_fns_apply=policy_fns_apply,
             critic_fn=self._critic.apply,
             unflatten_obs_fn=unflatten_obs_fn_vmap,
+            unflatten_actions_fn=unflatten_actions_fn_vmap,
             transitions=samples,
         )
 
@@ -462,10 +475,13 @@ class MATD3:
             policy_params = []
             target_policy_params = []
             policy_optimizer_state = []
-            policy_optimizer = optax.adam(
-                learning_rate=self._config.policy_learning_rate
+            grad_clip = optax.clip_by_global_norm(self._config.max_grad_norm)
+            policy_optimizer = optax.chain(
+                    grad_clip,
+                    optax.adam(
+                    learning_rate=self._config.policy_learning_rate
+                )
             )
-            
             for agent_idx, (pol_grad, pol_opt_state) in enumerate(
                 zip(policy_gradients, training_state.policy_optimizer_state)
             ):

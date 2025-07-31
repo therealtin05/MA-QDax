@@ -128,6 +128,71 @@ class Transition(flax.struct.PyTreeNode):
         )
         return dummy_transition
 
+class ObservationTransition(flax.struct.PyTreeNode):
+    """Stores only observations for proximal mutation or other observation-based operations."""
+
+    obs: Observation
+
+    @property
+    def observation_dim(self) -> int:
+        """
+        Returns:
+            the dimension of the observation
+        """
+        return self.obs.shape[-1]  # type: ignore
+
+    @property
+    def flatten_dim(self) -> int:
+        """
+        Returns:
+            the dimension of the transition once flattened (just observation).
+        """
+        return self.observation_dim
+
+    def flatten(self) -> jnp.ndarray:
+        """
+        Returns:
+            a jnp.ndarray that corresponds to the flattened observation.
+        """
+        return self.obs
+
+    @classmethod
+    def from_flatten(
+        cls,
+        flattened_obs: jnp.ndarray,
+        transition: ObservationTransition,
+    ) -> ObservationTransition:
+        """
+        Creates an observation transition from a flattened observation in a jnp.ndarray.
+
+        Args:
+            flattened_obs: flattened observation in a jnp.ndarray of shape
+                (batch_size, obs_dim)
+            transition: an observation transition object (might be a dummy one) to
+                get the dimensions right
+
+        Returns:
+            an ObservationTransition object
+        """
+        return cls(obs=flattened_obs)
+
+    @classmethod
+    def init_dummy(cls, observation_dim: int) -> ObservationTransition:
+        """
+        Initialize a dummy observation transition that then can be passed to constructors 
+        to get all shapes right.
+
+        Args:
+            observation_dim: observation dimension
+
+        Returns:
+            a dummy observation transition
+        """
+        dummy_transition = ObservationTransition(
+            obs=jnp.zeros(shape=(1, observation_dim)),
+        )
+        return dummy_transition
+    
 
 class QDTransition(Transition):
     """Stores data corresponding to a transition collected by a QD algorithm."""

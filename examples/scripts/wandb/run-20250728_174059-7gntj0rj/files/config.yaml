@@ -1,0 +1,108 @@
+wandb_version: 1
+
+env_name:
+  desc: null
+  value: walker2d_uni
+episode_length:
+  desc: null
+  value: 1000
+num_agents:
+  desc: null
+  value: 2
+parameter_sharing:
+  desc: null
+  value: false
+emitter_type:
+  desc: null
+  value: mix
+homogenisation_method:
+  desc: null
+  value: concat
+num_timesteps:
+  desc: null
+  value: 7864320
+env_batch_size:
+  desc: null
+  value: 128
+warmstart_steps:
+  desc: null
+  value: 81920
+grad_updates_per_step:
+  desc: null
+  value: 0.3
+log_period:
+  desc: null
+  value: 1024
+num_evals:
+  desc: null
+  value: 20
+batch_size:
+  desc: null
+  value: 512
+learning_rate:
+  desc: null
+  value: 0.0003
+discount:
+  desc: null
+  value: 0.99
+tau:
+  desc: null
+  value: 0.005
+alpha_init:
+  desc: null
+  value: 1.0
+fix_alpha:
+  desc: null
+  value: true
+reward_scaling:
+  desc: null
+  value: 1.0
+replay_buffer_size:
+  desc: null
+  value: 1000000
+normalize_observations:
+  desc: null
+  value: false
+max_grad_norm:
+  desc: null
+  value: 10.0
+policy_hidden_layer_sizes:
+  desc: null
+  value:
+  - 64
+  - 64
+critic_hidden_layer_sizes:
+  desc: null
+  value:
+  - 256
+  - 256
+seed:
+  desc: null
+  value: 1
+_wandb:
+  desc: null
+  value:
+    python_version: 3.10.18
+    cli_version: 0.15.4
+    is_jupyter_run: true
+    is_kaggle_kernel: false
+    start_time: 1753699259.15858
+    t:
+      1:
+      - 12
+      - 45
+      - 55
+      2:
+      - 12
+      - 45
+      - 55
+      3:
+      - 13
+      - 15
+      - 16
+      - 23
+      4: 3.10.18
+      5: 0.15.4
+      8:
+      - 1
+      - 5

@@ -17,6 +17,10 @@ def make_matd3_loss_fn(
         [Observation],
         dict[int, jnp.ndarray]
     ],
+    unflatten_actions_fn: Callable[
+        [Observation],
+        dict[int, jnp.ndarray]
+    ],
     policy_noise: float,
     noise_clip: float,
     reward_scaling: float,
@@ -48,11 +52,14 @@ def make_matd3_loss_fn(
         """Policy loss function for TD3 agent."""
 
         unflatten_obs = unflatten_obs_fn(transitions.obs)
+        ## For method 2
+        # unflatten_actions = unflatten_actions_fn(transitions.actions)
         num_agents = len(policy_params)
         
-        def single_agent_policy_loss(agent_idx: int, agent_params: Params) -> jnp.ndarray:
+        def single_agent_policy_loss(agent_params: Params, agent_idx: int) -> jnp.ndarray:
             """Compute policy loss for a single agent"""
             
+            # Method 1
             # Get all current actions using current policy parameters
             agent_actions = []
             for i in range(num_agents):
@@ -63,9 +70,14 @@ def make_matd3_loss_fn(
                     # Use current policy_params for other agents
                     action = policy_fns_apply(i, policy_params[i], unflatten_obs[i])
                 agent_actions.append(action)
-            
-            # Flatten all actions
             flatten_actions = jnp.concatenate(agent_actions, axis=-1)
+            
+
+            # # Method 2
+            # new_unflatten_agent_actions =  unflatten_actions.copy()
+            # new_unflatten_agent_actions[agent_idx] = policy_fns_apply(agent_idx, agent_params, unflatten_obs[agent_idx])
+            # # Flatten all actions
+            # flatten_actions = jnp.concatenate([a for a in new_unflatten_agent_actions.values()], axis=-1)
             
             # Get Q-value using the critic
             q_value = critic_fn(
@@ -79,17 +91,18 @@ def make_matd3_loss_fn(
             policy_loss = -jnp.mean(q1_action)
             
             return policy_loss
+    
         
         # Compute losses and gradients for each agent
         policy_losses = []
         policy_gradients = []
         
         for agent_idx in range(num_agents):
-            # Create a loss function that only depends on this agent's parameters
-            agent_loss_fn = lambda params, idx=agent_idx: single_agent_policy_loss(idx, params)
+            # # Create a loss function that only depends on this agent's parameters
+            # agent_loss_fn = lambda params, idx=agent_idx: single_agent_policy_loss(params)
             
             # Compute loss and gradient for this agent
-            agent_loss, agent_gradient = jax.value_and_grad(agent_loss_fn)(policy_params[agent_idx])
+            agent_loss, agent_gradient = jax.value_and_grad(single_agent_policy_loss)(policy_params[agent_idx], agent_idx)
             
             policy_losses.append(agent_loss)
             policy_gradients.append(agent_gradient)
@@ -123,17 +136,12 @@ def make_matd3_loss_fn(
             Return the loss function used to train the critic in TD3.
         """
         unflatten_next_obs = unflatten_obs_fn(transitions.next_obs)
-        # jax.tree_util.tree_map(
-        #     lambda x: print(f"obs shape {x.shape}"), 
-        #     unflatten_next_obs
-        # )
         next_actions = {}
         for agent_idx, (params, agent_obs) in enumerate(
                 zip(
                 target_policy_params, unflatten_next_obs.values()
             )
         ):
-            # jax.debug.print("duma print ra cho tao obs shape: {shape}", shape=agent_obs.shape)
             a = policy_fns_apply(agent_idx, params, agent_obs)
             random_key, subkey = jax.random.split(random_key)
             noise = (jax.random.normal(subkey, shape=a.shape) * policy_noise).clip(-noise_clip, noise_clip)
@@ -178,14 +186,18 @@ def matd3_policy_loss_fn(
         [Observation],
         dict[int, jnp.ndarray]
     ],
+    unflatten_actions_fn: Callable[
+        [Observation],
+        dict[int, jnp.ndarray]
+    ],
     transitions: Transition,
 ) -> Tuple[List[jnp.ndarray], List[Params]]:
-    """Policy loss function for TD3 agent."""
+    """Policy loss function for MATD3 agent."""
 
     unflatten_obs = unflatten_obs_fn(transitions.obs)
     num_agents = len(policy_params)
     
-    def single_agent_policy_loss(agent_idx: int, agent_params: Params) -> jnp.ndarray:
+    def single_agent_policy_loss(agent_params: Params, agent_idx: int) -> jnp.ndarray:
         """Compute policy loss for a single agent"""
         
         # Get all current actions using current policy parameters
@@ -220,12 +232,80 @@ def matd3_policy_loss_fn(
     policy_gradients = []
     
     for agent_idx in range(num_agents):
-        # Create a loss function that only depends on this agent's parameters
-        agent_loss_fn = lambda params, idx=agent_idx: single_agent_policy_loss(idx, params)
-        
         # Compute loss and gradient for this agent
-        agent_loss, agent_gradient = jax.value_and_grad(agent_loss_fn)(policy_params[agent_idx])
+        agent_loss, agent_gradient = jax.value_and_grad(single_agent_policy_loss)(
+            policy_params[agent_idx], agent_idx
+        )
+
+        policy_losses.append(agent_loss)
+        policy_gradients.append(agent_gradient)
+    
+    return policy_losses, policy_gradients
+
+
+def matd3_policy_loss_fn_v2(
+    policy_params: List[Params],
+    critic_params: Params,
+    policy_fns_apply: Callable[[int, Params, Observation], jnp.ndarray],  # Changed type
+    critic_fn: Callable[[Params, Observation, Action], jnp.ndarray],
+    unflatten_obs_fn: Callable[
+        [Observation],
+        dict[int, jnp.ndarray]
+    ],
+    unflatten_actions_fn: Callable[
+        [Observation],
+        dict[int, jnp.ndarray]
+    ],
+    transitions: Transition,
+) -> Tuple[List[jnp.ndarray], List[Params]]:
+    """Policy loss function for TD3 agent."""
+
+    unflatten_obs = unflatten_obs_fn(transitions.obs)
+    unflatten_actions = unflatten_actions_fn(transitions.actions)
+    num_agents = len(policy_params)
+    
+    def single_agent_policy_loss(agent_params: Params, agent_idx: int) -> jnp.ndarray:
+        """Compute policy loss for a single agent"""
         
+        # Get all current actions using current policy parameters
+        # agent_actions = []
+        # for i in range(num_agents):
+        #     if i == agent_idx:
+        #         # Use the agent_params being optimized for this agent
+        #         action = policy_fns_apply(i, agent_params, unflatten_obs[i])
+        #     else:
+        #         # Use current policy_params for other agents
+        #         action = policy_fns_apply(i, policy_params[i], unflatten_obs[i])
+        #     agent_actions.append(action)
+        
+        new_unflatten_agent_actions =  unflatten_actions.copy()
+        new_unflatten_agent_actions[agent_idx] = policy_fns_apply(agent_idx, agent_params, unflatten_obs[agent_idx])
+        # Flatten all actions
+        flatten_actions = jnp.concatenate([a for a in new_unflatten_agent_actions.values()], axis=-1)
+        
+        # Get Q-value using the critic
+        q_value = critic_fn(
+            critic_params, obs=transitions.obs, actions=flatten_actions
+        )
+        
+        # Use only the first critic's Q-value (standard in TD3)
+        q1_action = jnp.take(q_value, jnp.asarray([0]), axis=-1)
+        
+        # Policy loss is negative Q-value (we want to maximize Q)
+        policy_loss = -jnp.mean(q1_action)
+        
+        return policy_loss
+    
+    # Compute losses and gradients for each agent
+    policy_losses = []
+    policy_gradients = []
+    
+    for agent_idx in range(num_agents):
+        # Compute loss and gradient for this agent
+        agent_loss, agent_gradient = jax.value_and_grad(single_agent_policy_loss)(
+            policy_params[agent_idx], agent_idx
+        )
+
         policy_losses.append(agent_loss)
         policy_gradients.append(agent_gradient)
     

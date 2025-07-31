@@ -1,13 +1,17 @@
 """File defining mutation and crossover functions."""
 
 from functools import partial
-from typing import Optional, Tuple
+from typing import Optional, Tuple, Callable
 
 import jax
 import jax.numpy as jnp
 
-from qdax.types import Genotype, RNGKey
-
+from qdax.types import Genotype, RNGKey, Observation, Action
+from qdax.core.neuroevolution.buffers.buffer import (
+    QDTransition,
+    ReplayBuffer,
+    Transition,
+)
 
 def _polynomial_mutation(
     x: jnp.ndarray,
@@ -237,3 +241,143 @@ def isoline_variation(
     )
 
     return x, random_key
+
+# @partial(
+#         jax.jit,
+#         static_argnames=("mutation_mag", "mutation_noise", "minval", "maxval")
+# )
+def _proximal_mutation(
+    x: Genotype,
+    random_key: RNGKey,
+    policy_fn: Callable[[Genotype, Observation], Action],
+    obs: Observation,
+    mutation_mag: float,
+    mutation_noise: bool = False,
+    minval: float = -jnp.inf,
+    maxval: float = jnp.inf,
+) -> Genotype:
+    """Base proximal mutation for one genotype.
+
+    Applies sensitivity-scaled Gaussian perturbations to neural network parameters,
+    as described in PDERL (Algorithm 2).
+
+    Args:
+        x: Parameters (genotype, shape: [genotype_dim]).
+        random_key: JAX random key for reproducibility.
+        policy_fn: Function mapping (params, state) to actions.
+        obs: Observations (shape: [batch_size, state_dim]).
+        mutation_mag: Mutation magnitude (sigma, e.g., 0.1 or 0.01).
+        mutation_noise: If True, sample mutation magnitude from Normal distribution.
+        minval: Minimum value to clip the parameters.
+        maxval: Maximum value to clip the parameters.
+
+    Returns:
+        New parameters (mutated genotype).
+    """
+    # Sample mutation magnitude if mutation_noise is enabled
+    if mutation_noise:
+        random_key, subkey = jax.random.split(random_key)
+        mag_dist = jax.random.normal(subkey, shape=()) * 0.02 + mutation_mag
+        mutation_mag = jnp.maximum(mag_dist, 0.0)  # Ensure non-negative
+
+    # # Compute policy outputs
+    # outputs = policy_fn(x, obs)  # Shape: [batch_size, num_outputs]
+    # num_outputs = outputs.shape[1]
+
+    # Use JAX's jacobian function directly
+    def policy_wrapper(params):
+        return policy_fn(params, obs)  # Returns [batch_size, num_outputs]
+        
+    # Compute jacobian: [batch_size, num_outputs, tree_structure]
+    jacobian_full = jax.jacrev(policy_wrapper)(x)
+
+    # Average over batch and compute sensitivity
+    jacobian_mean = jax.tree_util.tree_map(
+        lambda j: jnp.mean(j, axis=0), jacobian_full  # [num_outputs, tree_structure]
+    )
+
+
+    # Compute sensitivity (s) as L2 norm of gradients across outputs
+    scaling = jax.tree_util.tree_map(
+        lambda j: jnp.sqrt(jnp.sum(j**2, axis=0)), jacobian_mean
+    )  # Shape: TreeArray{key, [(param.shape, )]}
+    
+    scaling = jax.tree_util.tree_map(
+        lambda s: jnp.where(s == 0, 1.0, s), scaling
+    )  # Avoid division by zero
+
+    scaling = jax.tree_util.tree_map(
+        lambda s: jnp.where(s < 0.01, 0.01, s), scaling  # Clip small values
+    )
+
+    def apply_mutation(x_layer, scaling_layer, key):
+        delta = jax.random.normal(key, shape=x_layer.shape) * mutation_mag
+        delta = delta / scaling_layer
+        return jnp.clip(x_layer + delta, minval, maxval)
+
+    # create a tree with random keys
+    nb_leaves = len(jax.tree_util.tree_leaves(x))
+    random_key, subkey = jax.random.split(random_key)
+    subkeys = jax.random.split(subkey, num=nb_leaves)
+    keys_tree = jax.tree_util.tree_unflatten(jax.tree_util.tree_structure(x), subkeys)
+
+    # apply mutation to each branch of the tree
+    new_x = jax.tree_util.tree_map(apply_mutation, x, scaling, keys_tree)
+
+    return new_x
+
+
+# @partial(
+#         jax.jit,
+#         static_argnames=("mutation_mag", "mutation_noise", "minval", "maxval", "policy_fn")
+# )
+def proximal_mutation(
+    x: Genotype,
+    random_key: RNGKey,
+    policy_fn: Callable[[Genotype, Observation], Action],
+    obs: jnp.ndarray,
+    mutation_mag: float,
+    mutation_noise: bool = False,
+    minval: float = -jnp.inf,
+    maxval: float = jnp.inf,
+) -> Tuple[Genotype, RNGKey]:
+    """
+    Proximal mutation over several genotypes.
+
+    Applies sensitivity-scaled Gaussian perturbations to a batch of neural network
+    parameters, as described in PDERL (Algorithm 2).
+
+    Args:
+        x: a batch of genotypes
+        random_key: JAX random key for reproducibility.
+        policy_fn: Function mapping (params, state) to actions.
+        buffer: Genetic memory (array of states, shape: [batch_size, buffer_size, state_dim]).
+        mutation_batch_size: Number of states to sample per genotype (N_M, e.g., 256).
+        mutation_mag: Mutation magnitude (sigma, e.g., 0.1 or 0.01).
+        mutation_noise: If True, sample mutation magnitude from Normal distribution.
+        minval: Minimum value to clip the genotypes.
+        maxval: Maximum value to clip the genotypes.
+
+    Returns:
+        New genotypes (same shape as input) and a new RNG key.
+    """
+    random_key, subkey = jax.random.split(random_key)
+    batch_size = jax.tree_util.tree_leaves(x)[0].shape[0]
+    mutation_keys = jax.random.split(subkey, num=batch_size)
+    
+    # Vectorize the base mutation function
+    mutation_fn = partial(
+        _proximal_mutation,
+        policy_fn=policy_fn,
+        obs=obs,
+        mutation_mag=mutation_mag,
+        mutation_noise=mutation_noise,
+        minval=minval,
+        maxval=maxval,
+    )
+    mutation_fn = jax.vmap(mutation_fn, in_axes=(0, 0))
+    
+    # Apply mutation to batch
+    new_x = mutation_fn(x, mutation_keys)
+    
+    return new_x, random_key

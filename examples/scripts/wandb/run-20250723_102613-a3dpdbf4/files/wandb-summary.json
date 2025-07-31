@@ -1,0 +1,1 @@
+{"error": "Cannot interpret value of type <class 'functools.partial'> as an abstract array; it does not have a dtype attribute", "_timestamp": 1753241176.4195657, "_runtime": 2.691260576248169, "_step": 0, "_wandb": {"runtime": 1}}

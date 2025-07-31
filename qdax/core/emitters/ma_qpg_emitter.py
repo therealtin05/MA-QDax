@@ -43,7 +43,7 @@ class QualityMAPGConfig:
     batch_size: int = 256
     soft_tau_update: float = 0.005
     policy_delay: int = 2
-
+    max_grad_norm: float = 30.0
 
 class QualityMAPGEmitterState(EmitterState):
     """Contains training state for the learner."""
@@ -87,6 +87,7 @@ class QualityMAPGEmitter(Emitter):
             policy_fns_apply=self.create_policy_fns,
             critic_fn=self._critic_network.apply,
             unflatten_obs_fn=jax.vmap(self.unflatten_obs_fn),
+            unflatten_actions_fn=jax.vmap(self.unflatten_actions_fn),
             reward_scaling=self._config.reward_scaling,
             discount=self._config.discount,
             noise_clip=self._config.noise_clip,
@@ -94,16 +95,25 @@ class QualityMAPGEmitter(Emitter):
         )
 
         # Init optimizers
-        self._actor_optimizer = optax.adam(
-            learning_rate=self._config.actor_learning_rate
+        grad_clip = optax.clip_by_global_norm(self._config.max_grad_norm)
+        self._actor_optimizer = optax.chain(
+                grad_clip, 
+                optax.adam(
+                learning_rate=self._config.actor_learning_rate
+            )
         )
-        self._critic_optimizer = optax.adam(
-            learning_rate=self._config.critic_learning_rate
+        self._critic_optimizer = optax.chain(
+                grad_clip,
+                optax.adam(
+                learning_rate=self._config.critic_learning_rate
+            )
         )
-        self._policies_optimizer = optax.adam(
-            learning_rate=self._config.policy_learning_rate
+        self._policies_optimizer = optax.chain(
+                grad_clip,
+                optax.adam(
+                learning_rate=self._config.policy_learning_rate
+            )
         )
-
     @property
     def batch_size(self) -> int:
         """
@@ -458,26 +468,6 @@ class QualityMAPGEmitter(Emitter):
         transitions: QDTransition,
     ) -> Tuple[List[optax.OptState], List[Params], List[Params]]:
 
-        # # Update greedy actor
-        # policy_loss, policy_gradient = self._policy_loss_fn(
-        #     actor_params,
-        #     critic_params,
-        #     transitions,
-        # )
-        # (
-        #     policy_updates,
-        #     actor_optimizer_state,
-        # ) = self._actor_optimizer.update(policy_gradient, actor_opt_state)
-        # actor_params = optax.apply_updates(actor_params, policy_updates)
-
-        # # Soft update of target greedy actor
-        # target_actor_params = jax.tree_map(
-        #     lambda x1, x2: (1.0 - self._config.soft_tau_update) * x1
-        #     + self._config.soft_tau_update * x2,
-        #     target_actor_params,
-        #     actor_params,
-        # )
-
         # Update greedy actor
         actor_losses, actor_gradients = self._policy_loss_fn(
             actor_params,
@@ -625,24 +615,6 @@ class QualityMAPGEmitter(Emitter):
         policy_params: List[Params],
         transitions: QDTransition,
     ) -> Tuple[optax.OptState, Params]:
-
-        # # compute loss
-        # _policy_loss, policy_gradient = self._policy_loss_fn(
-        #     policy_params,
-        #     critic_params,
-        #     transitions,
-        # )
-        # # Compute gradient and update policies
-        # (
-        #     policy_updates,
-        #     policy_optimizer_state,
-        # ) = self._policies_optimizer.update(policy_gradient, policy_optimizer_state)
-        # policy_params = optax.apply_updates(policy_params, policy_updates)
-
-
-
-
-
 
         # compute loss
         _policy_losses, policy_gradients = self._policy_loss_fn(

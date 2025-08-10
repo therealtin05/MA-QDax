@@ -167,4 +167,4 @@ dmypy.json
 # Cython debug symbols
 cython_debug/
 
-examples/scripts/wanbd/
+examples/scripts/wandb/

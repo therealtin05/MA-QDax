@@ -1,1 +1,0 @@
-{"error": "local variable 'new_alpha_optimizer_state' referenced before assignment", "_timestamp": 1754329742.395816, "_runtime": 1.7598671913146973, "_step": 0, "_wandb": {"runtime": 0}}

@@ -1,1 +1,0 @@
-{"error": "mean requires ndarray or scalar arguments, got <class 'list'> at position 0.", "_timestamp": 1754703009.6687539, "_runtime": 34.82317590713501, "_step": 0, "_wandb": {"runtime": 33}}

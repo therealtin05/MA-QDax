@@ -33,6 +33,7 @@ class MASACMEConfig:
     critic_learning_rate: float = 3e-4
     greedy_learning_rate: float = 3e-4
     policy_learning_rate: float = 1e-3
+    alpha_learning_rate: float = 3e-4
     noise_clip: float = 0.5
     policy_noise: float = 0.2
     discount: float = 0.99
@@ -40,7 +41,9 @@ class MASACMEConfig:
     batch_size: int = 256
     soft_tau_update: float = 0.005
     fix_alpha: bool = False
+    target_entropy_scale: float = 0.5
     max_grad_norm: float = 30.0
+    policy_delay: int = 4
 
 class MASACMEEmitter(MultiEmitter):
     def __init__(
@@ -71,12 +74,15 @@ class MASACMEEmitter(MultiEmitter):
             critic_learning_rate=config.critic_learning_rate,
             actor_learning_rate=config.greedy_learning_rate,
             policy_learning_rate=config.policy_learning_rate,
+            alpha_learning_rate=config.alpha_learning_rate,
             discount=config.discount,
             reward_scaling=config.reward_scaling,
             batch_size=config.batch_size,
             tau=config.soft_tau_update,
             fix_alpha=config.fix_alpha,
-            max_grad_norm=config.max_grad_norm
+            target_entropy_scale=config.target_entropy_scale,
+            max_grad_norm=config.max_grad_norm,
+            policy_delay=config.policy_delay,
         )
 
         # define the quality emitter

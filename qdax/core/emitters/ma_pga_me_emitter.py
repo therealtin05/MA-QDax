@@ -22,8 +22,16 @@ class MAPGAMEConfig:
     
     variation_percentage: float = 0.3
     crossplay_percentage: float = 0.3
+    safe_mutation_percentage: float = 0.0
+
+    # Mix mutate params
     agents_to_mutate: int = 1
     
+    # Safe mutate params
+    safe_mut_mag: float = 0.1
+    safe_mut_val_bound: float = 1000.0
+    safe_mut_noise: bool = False
+
     num_critic_training_steps: int = 300
     num_pg_training_steps: int = 100
 
@@ -97,20 +105,34 @@ class MAPGAMEEmitter(MultiEmitter):
             )
 
         elif self._config.emitter_type == "safe_mut":
+            if self._config.crossplay_percentage == 0:
+                raise ValueError(
+                    "For 'safe_mut' emitter_type, 'safe_mutation_percentage' must be non-zero."
+                )
+            # define the GA emitter
             ga_emitter = ProximalMultiAgentEmitter(
                 mutation_fn=mutation_fn,
                 variation_fn=variation_fn,
                 variation_percentage=self._config.variation_percentage,
                 crossplay_percentage=self._config.crossplay_percentage,
+                safe_mutation_percentage=self._config.safe_mutation_percentage,
                 batch_size=ga_batch_size,
                 num_agents=len(policy_network),
                 role_preserving=True,
                 agents_to_mutate=self._config.agents_to_mutate,
+                safe_mut_mag=self._config.safe_mut_mag,
+                safe_mut_val_bound=self._config.safe_mut_val_bound,
+                safe_mut_noise=self._config.safe_mut_noise,
                 env=env,
                 policy_network=policy_network
             )
 
-        else:
+        elif self._config.emitter_type == "role_preserving":
+            if self._config.crossplay_percentage == 0:
+                raise ValueError(
+                    "For 'role_preserving' emitter_type, 'crossplay_percentage' must be non-zero."
+                )
+
             # define the GA emitter
             ga_emitter = MultiAgentEmitter(
                 mutation_fn=mutation_fn,
@@ -122,5 +144,12 @@ class MAPGAMEEmitter(MultiEmitter):
                 role_preserving=True,
                 agents_to_mutate=self._config.agents_to_mutate
             ) 
+        
+        else:
+            raise ValueError(
+                f"Unknown emitter_type '{self._config.emitter_type}'. "
+                "Must be one of ['naive', 'safe_mut', 'role_preserving']"
+            )
+                    
             
         super().__init__(emitters=(q_emitter, ga_emitter))

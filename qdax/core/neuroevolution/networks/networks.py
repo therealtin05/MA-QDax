@@ -61,7 +61,6 @@ class MLP(nn.Module):
 
                 hidden = nn.Dense(
                     hidden_size,
-                    # name=f"hidden_{i}",
                     kernel_init=kernel_init,
                     use_bias=self.bias,
                 )(hidden)

@@ -14,6 +14,8 @@ from qdax.environments.multi_agent_wrappers import MultiAgentBraxWrapper
 
 from qdax.core.neuroevolution.buffers.buffer import ReplayBuffer, ObservationTransition
 
+from qdax.core.emitters.mutation_operators import proximal_mutation
+
 class NaiveMultiAgentMixingEmitter(Emitter):
     def __init__(
         self,
@@ -260,6 +262,7 @@ class ProximalMultiAgentEmitter(Emitter):
         variation_fn: Callable[[Genotype, Genotype, RNGKey], Tuple[Genotype, RNGKey]],
         variation_percentage: float,
         crossplay_percentage: float,
+        safe_mutation_percentage: float,
         batch_size: int,
         num_agents: int,
         env: MultiAgentBraxWrapper,
@@ -269,16 +272,23 @@ class ProximalMultiAgentEmitter(Emitter):
         transition_batch_size: int = 256,
         role_preserving: bool = True,
         agents_to_mutate: int = -1,
+        safe_mut_mag=0.1,
+        safe_mut_val_bound=1000.0,
+        safe_mut_noise=False,
         **kwargs: Dict,
     ) -> None:
         self._mutation_fn = mutation_fn
         self._variation_fn = variation_fn
         self._variation_percentage = variation_percentage
+        self._safe_mutation_percentage = safe_mutation_percentage
         self._crossplay_percentage = crossplay_percentage
         self._batch_size = batch_size
         self._num_agents = num_agents # number of multiagent (2 for walker2d)
         self._role_preserving = role_preserving
         self._agents_to_mutate = agents_to_mutate
+        self._safe_mut_mag = safe_mut_mag
+        self._safe_mut_val_bound = safe_mut_val_bound
+        self._safe_mut_noise = safe_mut_noise
         self._env = env
         self._policy_network = policy_network
         self._transition_batch_size = transition_batch_size
@@ -361,8 +371,11 @@ class ProximalMultiAgentEmitter(Emitter):
 
         n_variation = int(self._batch_size * self._variation_percentage)
         n_crossplay = int(self._batch_size * self._crossplay_percentage)
-        n_mutation = self._batch_size - n_variation - n_crossplay
+        n_safe_mutation = int(self._batch_size * self._safe_mutation_percentage)
+        n_mutation = self._batch_size - n_variation - n_crossplay - n_safe_mutation
+
         x_variation = None
+        x_safe_mutation = None
         x_mutation = None
         x_crossplay = None
         agent_indices = (
@@ -378,16 +391,22 @@ class ProximalMultiAgentEmitter(Emitter):
 
         if n_mutation > 0:
             x1, random_key = repertoire.sample(random_key, n_mutation)
-            # x_mutation, random_key = self._mutation_fn(x1, random_key)
+            x_mutation, random_key = self._mutation_fn(x1, random_key)
 
-            x_mutation = []
+        if n_safe_mutation > 0:
+            x1, random_key = repertoire.sample(random_key, n_safe_mutation)
+
+            x_safe_mutation = []
             transitions, random_key = emitter_state.observation_buffer.sample(random_key, self._transition_batch_size)
+
             obs = jax.vmap(self.unflatten_obs_fn)(transitions.obs)
             for agent_idx, (p, o) in enumerate(
                 zip(x1, obs.values())
             ):
-                new_x_i, random_key = self._mutation_fn(p, random_key, self._policy_network[agent_idx].apply, o)
-                x_mutation.append(new_x_i)
+                new_x_i, random_key = proximal_mutation(p, random_key, self._policy_network[agent_idx].apply, o,
+                                                        mutation_mag=self._safe_mut_mag, minval=-self._safe_mut_val_bound,
+                                                        maxval=self._safe_mut_val_bound, mutation_noise=self._safe_mut_noise)
+                x_safe_mutation.append(new_x_i)
 
 
         if n_crossplay > 0:
@@ -405,15 +424,16 @@ class ProximalMultiAgentEmitter(Emitter):
                     else x1[random.randint(0, self._num_agents - 1)]
                 )
 
-        x_values = [x for x in [x_variation, x_mutation, x_crossplay] if x is not None]
+        x_values = [x for x in [x_variation, x_mutation, x_safe_mutation, x_crossplay] if x is not None]
         genotypes = jax.tree_util.tree_map(
             lambda *x: jnp.concatenate(x, axis=0), *x_values
         )
         operation_history = jnp.concatenate(
             [
-                jnp.zeros(n_variation, dtype=jnp.int32),
-                jnp.ones(n_mutation, dtype=jnp.int32),
-                2 * jnp.ones(n_crossplay, dtype=jnp.int32),
+                jnp.zeros(n_variation, dtype=jnp.int32),      # 0 = variation
+                jnp.ones(n_mutation, dtype=jnp.int32),        # 1 = mutation
+                2 * jnp.ones(n_safe_mutation, dtype=jnp.int32), # 2 = safe_mutation  
+                3 * jnp.ones(n_crossplay, dtype=jnp.int32),   # 3 = crossplay
             ],
             axis=0,
         )

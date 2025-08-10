@@ -322,6 +322,8 @@ class QualityMAPGEmitter(Emitter):
         assert "transitions" in extra_scores.keys(), "Missing transitions or wrong key"
         transitions = extra_scores["transitions"]
 
+        # jax.debug.print("transitions shape {shape}", shape=transitions.obs.shape)
+
         # add transitions in the replay buffer
         replay_buffer = emitter_state.replay_buffer.insert(transitions)
         emitter_state = emitter_state.replace(replay_buffer=replay_buffer)

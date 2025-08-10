@@ -1,0 +1,124 @@
+{
+    "os": "Linux-6.8.0-65-generic-x86_64-with-glibc2.35",
+    "python": "3.10.18",
+    "heartbeatAt": "2025-08-09T13:43:08.211049",
+    "startedAt": "2025-08-09T13:43:07.093735",
+    "docker": null,
+    "cuda": null,
+    "args": null,
+    "state": "running",
+    "program": "<python with no main file>",
+    "git": {
+        "remote": "https://github.com/therealtin05/MA-QDax.git",
+        "commit": "6656fc5690049649b5281e2379abe4031f4dad50"
+    },
+    "email": "haidanggacon@gmail.com",
+    "root": "/home/tin/Desktop/HaiDang/RL/Mix-ME/MA-QDax",
+    "host": "tin-Cyborg-15-A13VFK",
+    "username": "tin",
+    "executable": "/home/tin/anaconda3/envs/mix-me/bin/python",
+    "cpu_count": 10,
+    "cpu_count_logical": 16,
+    "cpu_freq": {
+        "current": 751.1404999999999,
+        "min": 400.0,
+        "max": 4475.0
+    },
+    "cpu_freq_per_core": [
+        {
+            "current": 512.663,
+            "min": 400.0,
+            "max": 4700.0
+        },
+        {
+            "current": 1054.349,
+            "min": 400.0,
+            "max": 4700.0
+        },
+        {
+            "current": 1390.266,
+            "min": 400.0,
+            "max": 4700.0
+        },
+        {
+            "current": 1216.335,
+            "min": 400.0,
+            "max": 4700.0
+        },
+        {
+            "current": 1112.197,
+            "min": 400.0,
+            "max": 4900.0
+        },
+        {
+            "current": 870.18,
+            "min": 400.0,
+            "max": 4900.0
+        },
+        {
+            "current": 1349.659,
+            "min": 400.0,
+            "max": 4900.0
+        },
+        {
+            "current": 400.0,
+            "min": 400.0,
+            "max": 4900.0
+        },
+        {
+            "current": 400.221,
+            "min": 400.0,
+            "max": 4700.0
+        },
+        {
+            "current": 708.952,
+            "min": 400.0,
+            "max": 4700.0
+        },
+        {
+            "current": 1390.421,
+            "min": 400.0,
+            "max": 4700.0
+        },
+        {
+            "current": 400.0,
+            "min": 400.0,
+            "max": 4700.0
+        },
+        {
+            "current": 1069.138,
+            "min": 400.0,
+            "max": 3600.0
+        },
+        {
+            "current": 1095.744,
+            "min": 400.0,
+            "max": 3600.0
+        },
+        {
+            "current": 1090.023,
+            "min": 400.0,
+            "max": 3600.0
+        },
+        {
+            "current": 1094.293,
+            "min": 400.0,
+            "max": 3600.0
+        }
+    ],
+    "disk": {
+        "total": 228.63730239868164,
+        "used": 206.78635025024414
+    },
+    "gpu": "NVIDIA GeForce RTX 4060 Laptop GPU",
+    "gpu_count": 1,
+    "gpu_devices": [
+        {
+            "name": "NVIDIA GeForce RTX 4060 Laptop GPU",
+            "memory_total": 8585740288
+        }
+    ],
+    "memory": {
+        "total": 15.32657241821289
+    }
+}

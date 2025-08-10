@@ -39,6 +39,7 @@ class QualityMASACConfig:
     policy_hidden_layer_size: Tuple[int, ...] = (256, 256)
     critic_learning_rate: float = 3e-4
     actor_learning_rate: float = 3e-4
+    alpha_learning_rate: float = 3e-4
     policy_learning_rate: float = 1e-3
     alpha_learning_rate: float = 3e-4
     discount: float = 0.99
@@ -47,7 +48,9 @@ class QualityMASACConfig:
     tau: float = 0.005  # SAC uses tau instead of soft_tau_update
     alpha_init: float = 1.0
     fix_alpha: bool = False
+    target_entropy_scale: float = 0.5
     max_grad_norm: float = 30.0
+    policy_delay: int = 4
 
 class QualityMASACEmitterState(EmitterState):
     """Contains training state for the MASAC emitter."""
@@ -100,7 +103,9 @@ class QualityMASACEmitter(Emitter):
             unflatten_obs_fn=jax.vmap(self.unflatten_obs_fn),
             reward_scaling=self._config.reward_scaling,
             discount=self._config.discount,
-            action_sizes=self._config.action_sizes
+            action_sizes=self._config.action_sizes,
+            target_entropy_scale=self._config.target_entropy_scale,
+
         )
 
         # Init optimizers
@@ -167,14 +172,18 @@ class QualityMASACEmitter(Emitter):
 
         actor_params = jax.tree_util.tree_map(lambda x: x[0], init_genotypes)
 
-        # Initialize alpha parameters (temperature) for each agent
-        alpha_params = []
-        alpha_opt_state = []
-        for agent_idx in range(len(self._action_sizes)):
-            log_alpha = jnp.asarray(jnp.log(self._config.alpha_init), dtype=jnp.float32)
-            alpha_params.append(log_alpha)
-            alpha_opt_state.append(self._alpha_optimizer.init(log_alpha))
+        # # Initialize alpha parameters (temperature) for each agent
+        # alpha_params = []
+        # alpha_opt_state = []
+        # for agent_idx in range(len(self._action_sizes)):
+        #     log_alpha = jnp.asarray(jnp.log(self._config.alpha_init), dtype=jnp.float32)
+        #     alpha_params.append(log_alpha)
+        #     alpha_opt_state.append(self._alpha_optimizer.init(log_alpha))
 
+        # Single alpha
+        alpha_params = jnp.asarray(jnp.log(self._config.alpha_init), dtype=jnp.float32)
+        alpha_opt_state = self._alpha_optimizer.init(alpha_params)
+        
         # Prepare init optimizer states
         critic_optimizer_state = self._critic_optimizer.init(critic_params)
         actor_optimizer_state = []
@@ -381,44 +390,13 @@ class QualityMASACEmitter(Emitter):
             random_key, sample_size=self._config.batch_size
         )
 
-
-        # Update Alpha (temperature parameter) if not fixed
         alpha_params = emitter_state.alpha_params
-        alpha_opt_state = emitter_state.alpha_opt_state
-
-        if not self._config.fix_alpha:
-            random_key, subkey = jax.random.split(random_key)
-            alpha_losses, alpha_gradients = self._alpha_loss_fn(
-                log_alphas=emitter_state.alpha_params,
-                policy_params=emitter_state.actor_params,
-                transitions=transitions,
-                random_key=subkey,
-            )
-
-            # Update alpha parameters for each agent
-            new_alpha_params = []
-            new_alpha_opt_state = []
-
-            for agent_idx, (alpha_grad, alpha_opt_state_i) in enumerate(
-                zip(alpha_gradients, alpha_opt_state)
-            ):
-                alpha_updates, updated_opt_state = self._alpha_optimizer.update(
-                    alpha_grad, alpha_opt_state_i
-                )
-                updated_alpha = optax.apply_updates(
-                    emitter_state.alpha_params[agent_idx], alpha_updates
-                )
-                new_alpha_params.append(updated_alpha)
-                new_alpha_opt_state.append(updated_opt_state)
-
-            alpha_params = new_alpha_params
-            alpha_opt_state = new_alpha_opt_state
-        else:
-            alpha_losses = [jnp.array(0.0) for _ in range(len(self._action_sizes))]
 
         # Update Critic
-        alphas = [jnp.exp(log_alpha) for log_alpha in alpha_params]
+        # alphas = [jnp.exp(log_alpha) for log_alpha in alpha_params]
         
+        # Single alpha
+        alphas = jnp.exp(alpha_params)
         (
             critic_optimizer_state,
             critic_params,
@@ -435,13 +413,25 @@ class QualityMASACEmitter(Emitter):
         )
 
         # Update greedy actor (SAC updates every step, no delay)
-        (actor_optimizer_state, actor_params, random_key) = self._update_actor(
-            emitter_state.actor_params,
-            emitter_state.actor_opt_state,
-            emitter_state.critic_params,
-            alphas,
-            transitions,
-            random_key=random_key
+        (actor_optimizer_state, actor_params, alpha_opt_state, alpha_params, random_key) = jax.lax.cond(
+            emitter_state.steps % self._config.policy_delay == 0,
+            lambda _: (self._update_actor(
+                emitter_state.actor_params,
+                emitter_state.actor_opt_state,
+                emitter_state.critic_params,
+                emitter_state.alpha_params,
+                emitter_state.alpha_opt_state,
+                transitions,
+                random_key=random_key
+            )),
+            lambda _: (
+                emitter_state.actor_opt_state,
+                emitter_state.actor_params,
+                emitter_state.alpha_opt_state,
+                emitter_state.alpha_params,
+                random_key
+            ),
+            operand=None
         )
 
         # Create new training state
@@ -506,11 +496,17 @@ class QualityMASACEmitter(Emitter):
         actor_params: List[Params],
         actor_opt_state: List[optax.OptState],
         critic_params: Params,
-        alphas: List[jnp.ndarray],
+        alpha_params: List[jnp.ndarray],
+        alpha_opt_state: List[optax.OptState],
         transitions: QDTransition,
         random_key: RNGKey,
-    ) -> Tuple[List[optax.OptState], List[Params], RNGKey]:
+    ) -> Tuple[List[optax.OptState], List[Params], List[optax.OptState], List[Params], RNGKey]:
         """Update the actor parameters using SAC policy loss."""
+
+        # alphas = [jnp.exp(log_alpha) for log_alpha in alpha_params]
+
+        #Single alpha
+        alphas = jnp.exp(alpha_params)
 
         random_key, subkey = jax.random.split(random_key)
         # Update greedy actor
@@ -539,9 +535,52 @@ class QualityMASACEmitter(Emitter):
             new_actor_params.append(updated_params)
             new_actor_optimizer_state.append(act_opt_state)
 
+
+        if not self._config.fix_alpha:
+            random_key, subkey = jax.random.split(random_key)
+            alpha_losses, alpha_gradients = jax.value_and_grad(self._alpha_loss_fn)(
+                alpha_params,
+                policy_params=actor_params,
+                transitions=transitions,
+                random_key=subkey,
+            )
+
+            ## Handle single alpha
+            alpha_updates, new_alpha_opt_state = self._alpha_optimizer.update(
+                alpha_gradients, alpha_opt_state
+            )
+
+            new_alpha_params = optax.apply_updates(
+                    alpha_params, alpha_updates
+                )
+
+            ## Handle multi alpha
+            # # Update alpha parameters for each agent
+            # new_alpha_params = []
+            # new_alpha_opt_state = []
+
+            # for agent_idx, (alpha_grad, alpha_opt_state_i) in enumerate(
+            #     zip(alpha_gradients, alpha_opt_state)
+            # ):
+            #     alpha_updates, updated_opt_state = self._alpha_optimizer.update(
+            #         alpha_grad, alpha_opt_state_i
+            #     )
+            #     updated_alpha = optax.apply_updates(
+            #         alpha_params[agent_idx], alpha_updates
+            #     )
+            #     new_alpha_params.append(updated_alpha)
+            #     new_alpha_opt_state.append(updated_opt_state)
+
+
+        else:
+            alpha_losses = [jnp.array(0.0) for _ in range(len(self._action_sizes))]
+    
+
         return (
             new_actor_optimizer_state,
             new_actor_params,
+            new_alpha_opt_state,
+            new_alpha_params,
             random_key
         )
 
@@ -627,7 +666,8 @@ class QualityMASACEmitter(Emitter):
             critic_params=emitter_state.critic_params,
             policy_optimizer_state=policy_optimizer_state,
             policy_params=policy_params,
-            alphas=[jnp.exp(log_alpha) for log_alpha in emitter_state.alpha_params],
+            # alphas=[jnp.exp(log_alpha) for log_alpha in emitter_state.alpha_params],
+            alphas=jnp.exp(emitter_state.alpha_params), # Hangle single alpha, above is for multialpha
             transitions=transitions,
             random_key=random_key
         )

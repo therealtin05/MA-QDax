@@ -461,7 +461,7 @@ class MATD3:
         )
 
         # Update policy
-        policy_losses, policy_gradients = matd3_policy_loss_fn_v2(
+        policy_losses, policy_gradients = matd3_policy_loss_fn(
             policy_params=training_state.policy_params,
             critic_params=training_state.critic_params,
             policy_fns_apply=policy_fns_apply,

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from functools import partial
-from typing import Tuple
+from typing import Tuple, Dict
 
 import flax
 import jax
@@ -448,3 +448,156 @@ class ReplayBuffer(flax.struct.PyTreeNode):
         )
 
         return replay_buffer  # type: ignore
+    
+
+# class MultiAgentGeneticBuffer(flax.struct.PyTreeNode):
+#     """
+#     A genetic buffer where each agent has its own separate buffer space.
+#     Transitions are stored with agent identification for efficient retrieval.
+#     """
+    
+#     data: jnp.ndarray  # Shape: (num_agents, buffer_size_per_agent, flatten_dim)
+#     buffer_size_per_agent: int = flax.struct.field(pytree_node=False)
+#     num_agents: int = flax.struct.field(pytree_node=False)
+#     transition: Transition
+    
+#     current_positions: jnp.ndarray  # Shape: (num_agents,)
+#     current_sizes: jnp.ndarray      # Shape: (num_agents,)
+    
+#     @classmethod
+#     def init(
+#         cls,
+#         buffer_size_per_agent: int,
+#         num_agents: int,
+#         transition: Transition,
+#     ) -> "MultiAgentGeneticBuffer":
+#         """Initialize multi-agent genetic buffer."""
+#         flatten_dim = transition.flatten_dim
+#         data = jnp.ones((num_agents, buffer_size_per_agent, flatten_dim)) * jnp.nan
+#         current_sizes = jnp.zeros(num_agents, dtype=int)
+#         current_positions = jnp.zeros(num_agents, dtype=int)
+        
+#         return cls(
+#             data=data,
+#             current_sizes=current_sizes,
+#             current_positions=current_positions,
+#             buffer_size_per_agent=buffer_size_per_agent,
+#             num_agents=num_agents,
+#             transition=transition,
+#         )
+    
+#     @partial(jax.jit, static_argnames=("sample_size",))
+#     def sample_agent(
+#         self,
+#         agent_idx: int,
+#         random_key: RNGKey,
+#         sample_size: int,
+#     ) -> Tuple[Transition, RNGKey]:
+#         """Sample transitions for a specific agent."""
+#         random_key, subkey = jax.random.split(random_key)
+        
+#         # Sample from agent's specific buffer
+#         idx = jax.random.randint(
+#             subkey,
+#             shape=(sample_size,),
+#             minval=0,
+#             maxval=self.current_sizes[agent_idx]
+#         )
+        
+#         # Get agent's data
+#         agent_data = self.data[agent_idx]
+#         samples = jnp.take(agent_data, idx, axis=0, mode="clip")
+#         transitions = self.transition.__class__.from_flatten(samples, self.transition)
+        
+#         return transitions, random_key
+    
+#     @jax.jit
+#     def insert_agent_transitions(
+#         self, 
+#         agent_idx: int, 
+#         transitions: Transition
+#     ) -> MultiAgentGeneticBuffer:
+#         """Insert transitions for a specific agent."""
+#         flattened_transitions = transitions.flatten()
+#         flattened_transitions = flattened_transitions.reshape(
+#             (-1, flattened_transitions.shape[-1])
+#         )
+#         num_transitions = flattened_transitions.shape[0]
+        
+#         # Get agent's current state
+#         position = self.current_positions[agent_idx]
+#         size = self.current_sizes[agent_idx]
+#         max_replay_size = self.buffer_size_per_agent
+        
+#         if num_transitions > max_replay_size:
+#             raise ValueError(
+#                 "Trying to insert a batch of samples larger than the maximum replay "
+#                 f"size. num_samples: {num_transitions}, "
+#                 f"max replay size {max_replay_size}"
+#             )
+
+#         # Update agent's buffer
+#         agent_data = self.data[agent_idx]
+        
+#         # Calculate new position with wrap-around
+#         end_pos = position + num_transitions
+#         if end_pos <= max_replay_size:
+#             # Simple case: no wrap-around
+#             new_agent_data = jax.lax.dynamic_update_slice_in_dim(
+#                 agent_data,
+#                 flattened_transitions,
+#                 start_index=position,
+#                 axis=0,
+#             )
+#             new_position = end_pos % max_replay_size
+#         else:
+#             # Wrap-around case
+#             first_chunk_size = max_replay_size - position
+#             second_chunk_size = num_transitions - first_chunk_size
+            
+#             # Insert first chunk
+#             new_agent_data = jax.lax.dynamic_update_slice_in_dim(
+#                 agent_data,
+#                 flattened_transitions[:first_chunk_size],
+#                 start_index=position,
+#                 axis=0,
+#             )
+#             # Insert second chunk at beginning
+#             new_agent_data = jax.lax.dynamic_update_slice_in_dim(
+#                 new_agent_data,
+#                 flattened_transitions[first_chunk_size:],
+#                 start_index=0,
+#                 axis=0,
+#             )
+#             new_position = second_chunk_size
+        
+#         # Update buffer data
+#         new_data = self.data.at[agent_idx].set(new_agent_data)
+#         new_positions = self.current_positions.at[agent_idx].set(new_position)
+#         new_sizes = self.current_sizes.at[agent_idx].set(
+#             jnp.minimum(size + num_transitions, max_replay_size)
+#         )
+        
+#         return self.replace(
+#             data=new_data,
+#             current_positions=new_positions,
+#             current_sizes=new_sizes,
+#         )
+    
+#     @partial(jax.jit, static_argnames=("sample_size",))
+#     def sample_all_agents(
+#         self,
+#         random_key: RNGKey,
+#         sample_size: int,
+#     ) -> Tuple[Dict[int, Transition], RNGKey]:
+#         """Sample transitions for all agents."""
+#         keys = jax.random.split(random_key, self.num_agents + 1)
+#         random_key = keys[0]
+#         agent_keys = keys[1:]
+        
+#         agent_transitions = {}
+#         for agent_idx in range(self.num_agents):
+#             transitions, _ = self.sample_agent(agent_idx, agent_keys[agent_idx], sample_size)
+#             agent_transitions[agent_idx] = transitions
+            
+#         return agent_transitions, random_key

@@ -1,0 +1,1 @@
+{"error": "local variable 'alpha_params' referenced before assignment", "_timestamp": 1754329554.0687912, "_runtime": 1.7418670654296875, "_step": 0, "_wandb": {"runtime": 0}}

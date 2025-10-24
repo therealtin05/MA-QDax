@@ -20,6 +20,7 @@ from qdax.core.neuroevolution.networks.networks import QModule
 from qdax.core.neuroevolution.networks.masac_networks import MultiAgentCritic
 from qdax.environments.multi_agent_wrappers import MultiAgentBraxWrapper
 from qdax.types import Descriptor, ExtraScores, Fitness, Genotype, Params, RNGKey
+from qdax.core.emitters.mutation_operators import proximal_mutation
 
 from qdax.core.neuroevolution.networks.networks import MLP, QModule
 
@@ -49,8 +50,15 @@ class QualityMASACConfig:
     alpha_init: float = 1.0
     fix_alpha: bool = False
     target_entropy_scale: float = 0.5
-    max_grad_norm: float = 30.0
-    policy_delay: int = 4
+    max_grad_norm: float = 1000.0
+    policy_delay: int = 1
+
+    # Safe mutation
+    safe_mutation_on_pg: bool = False
+    safe_mutation_percentage: float = 0.5
+    safe_mut_mag: float = 0.1
+    safe_mut_val_bound: float = 1000.0
+    safe_mut_noise: bool = False
 
 class QualityMASACEmitterState(EmitterState):
     """Contains training state for the MASAC emitter."""
@@ -59,8 +67,8 @@ class QualityMASACEmitterState(EmitterState):
     critic_optimizer_state: optax.OptState
     actor_params: List[Params]
     actor_opt_state: List[optax.OptState]
-    alpha_params: List[Params]  # Temperature parameters per agent
-    alpha_opt_state: List[optax.OptState]
+    alpha_params: jnp.ndarray  # Temperature parameters per agent
+    alpha_opt_state: optax.OptState
     target_critic_params: Params
     replay_buffer: ReplayBuffer
     random_key: RNGKey
@@ -105,7 +113,6 @@ class QualityMASACEmitter(Emitter):
             discount=self._config.discount,
             action_sizes=self._config.action_sizes,
             target_entropy_scale=self._config.target_entropy_scale,
-
         )
 
         # Init optimizers
@@ -263,6 +270,11 @@ class QualityMASACEmitter(Emitter):
             offspring_actor,
         )
 
+        if self._config.safe_mutation_on_pg:
+            genotypes, random_key = self._apply_partial_safe_mutation(
+                genotypes, emitter_state, random_key
+            )
+
         return genotypes, random_key, jnp.array(0)
 
     @partial(
@@ -308,6 +320,95 @@ class QualityMASACEmitter(Emitter):
             The parameters of the actor.
         """
         return emitter_state.actor_params
+
+
+    @partial(jax.jit, static_argnames=("self",))
+    def _apply_partial_safe_mutation(
+        self,
+        genotypes: Genotype,
+        emitter_state: QualityMASACEmitterState,
+        random_key: RNGKey,
+    ) -> Tuple[Genotype, RNGKey]:
+        """Apply safe mutation to only a percentage of genotypes to save VRAM."""
+        
+        # Get batch size from first agent's genotypes
+        batch_size = jax.tree_util.tree_leaves(genotypes[0])[0].shape[0]
+        
+        # Calculate how many genotypes to mutate
+        num_to_mutate = int(batch_size * self._config.safe_mutation_percentage)
+        
+        if num_to_mutate == 0:
+            return genotypes, random_key
+        
+        # Randomly select indices to mutate (this is more memory efficient)
+        random_key, subkey = jax.random.split(random_key)
+        indices_to_mutate = jax.random.choice(
+            subkey, 
+            batch_size, 
+            shape=(num_to_mutate,), 
+            replace=False
+        )
+        
+        # Extract subset of genotypes to mutate
+        subset_genotypes = jax.tree_util.tree_map(
+            lambda x: x[indices_to_mutate], genotypes
+        )
+        
+        # Apply safe mutation to subset
+        mutated_subset, random_key = self._apply_safe_mutation_to_subset(
+            subset_genotypes, emitter_state, random_key
+        )
+        
+        # Use scatter update to put mutated genotypes back
+        def update_at_indices(original, mutated):
+            return original.at[indices_to_mutate].set(mutated)
+        
+        final_genotypes = jax.tree_util.tree_map(
+            update_at_indices,
+            genotypes,
+            mutated_subset
+        )
+        
+        return final_genotypes, random_key
+
+    @partial(jax.jit, static_argnames=("self",))
+    def _apply_safe_mutation_to_subset(
+        self,
+        subset_genotypes: Genotype,
+        emitter_state: QualityMASACEmitterState,
+        random_key: RNGKey,
+    ) -> Tuple[Genotype, RNGKey]:
+        """Apply safe mutation to a subset of genotypes."""
+        
+        subset_batch_size = jax.tree_util.tree_leaves(subset_genotypes[0])[0].shape[0]
+        
+        # Sample transitions (use smaller batch size for efficiency)
+        safe_mutation_batch_size = min(self._config.batch_size, subset_batch_size)
+        transitions, random_key = emitter_state.replay_buffer.sample(
+            random_key, safe_mutation_batch_size
+        )
+
+        # Unflatten observations
+        obs = jax.vmap(self.unflatten_obs_fn)(transitions.obs)
+        
+        # Apply safe mutation to each agent's subset
+        perturbed_genotypes = []
+        for agent_idx, (agent_params, agent_obs) in enumerate(
+            zip(subset_genotypes, obs.values())
+        ):
+            new_agent_params, random_key = proximal_mutation(
+                agent_params, 
+                random_key, 
+                self._policy_network[agent_idx].apply, 
+                agent_obs,
+                mutation_mag=self._config.safe_mut_mag, 
+                minval=-self._config.safe_mut_val_bound,
+                maxval=self._config.safe_mut_val_bound, 
+                mutation_noise=self._config.safe_mut_noise
+            )
+            perturbed_genotypes.append(new_agent_params)
+
+        return perturbed_genotypes, random_key
 
     @partial(jax.jit, static_argnames=("self",))
     def state_update(
@@ -496,11 +597,11 @@ class QualityMASACEmitter(Emitter):
         actor_params: List[Params],
         actor_opt_state: List[optax.OptState],
         critic_params: Params,
-        alpha_params: List[jnp.ndarray],
-        alpha_opt_state: List[optax.OptState],
+        alpha_params: jnp.ndarray,
+        alpha_opt_state: optax.OptState,
         transitions: QDTransition,
         random_key: RNGKey,
-    ) -> Tuple[List[optax.OptState], List[Params], List[optax.OptState], List[Params], RNGKey]:
+    ) -> Tuple[List[optax.OptState], List[Params], optax.OptState, Params, RNGKey]:
         """Update the actor parameters using SAC policy loss."""
 
         # alphas = [jnp.exp(log_alpha) for log_alpha in alpha_params]
@@ -686,7 +787,7 @@ class QualityMASACEmitter(Emitter):
         critic_params: Params,
         policy_optimizer_state: List[optax.OptState],
         policy_params: List[Params],
-        alphas: List[jnp.ndarray],
+        alphas: jnp.ndarray,
         transitions: QDTransition,
         random_key: RNGKey,
     ) -> Tuple[List[optax.OptState], List[Params], RNGKey]:
@@ -746,3 +847,11 @@ class QualityMASACEmitter(Emitter):
     def create_policy_fns(self, index, params, obs):
         """Create policy function dispatcher for different agents."""
         return jax.lax.switch(index, [pol.apply for pol in self._policy_network.values()], params, obs)
+    
+    @partial(jax.jit, static_argnames=("self"))
+    def unflatten_obs_fn(self, global_obs: jnp.ndarray) -> dict[int, jnp.ndarray]:
+        agent_obs = {}
+        for agent_idx, obs_indices in self._env.agent_obs_mapping.items():
+                agent_obs[agent_idx] = global_obs[obs_indices]
+        
+        return agent_obs

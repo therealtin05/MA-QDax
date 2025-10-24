@@ -187,7 +187,7 @@ def sac_alpha_loss_fn(
         the loss of the entropy parameter auto-tuning
     """
 
-    target_entropy = -0.5 * action_size
+    target_entropy = -1.0 * action_size
 
     dist_params = policy_fn(policy_params, transitions.obs)
     action = parametric_action_distribution.sample_no_postprocessing(

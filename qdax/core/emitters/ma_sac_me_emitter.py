@@ -23,7 +23,14 @@ class MASACMEConfig:
     variation_percentage: float = 0.3
     crossplay_percentage: float = 0.3
     agents_to_mutate: int = 1
-    
+    safe_mutation_on_pg: bool = False
+    pg_safe_mutation_percentage: float = 0.5
+
+    # Safe mutate params
+    safe_mut_mag: float = 0.1
+    safe_mut_val_bound: float = 1000.0
+    safe_mut_noise: bool = False
+
     num_critic_training_steps: int = 300
     num_pg_training_steps: int = 100
 
@@ -83,6 +90,11 @@ class MASACMEEmitter(MultiEmitter):
             target_entropy_scale=config.target_entropy_scale,
             max_grad_norm=config.max_grad_norm,
             policy_delay=config.policy_delay,
+            safe_mut_mag=config.safe_mut_mag,
+            safe_mut_val_bound=config.safe_mut_val_bound,
+            safe_mut_noise=config.safe_mut_noise,
+            safe_mutation_on_pg=config.safe_mutation_on_pg,
+            safe_mutation_percentage=config.pg_safe_mutation_percentage
         )
 
         # define the quality emitter

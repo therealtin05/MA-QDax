@@ -23,6 +23,9 @@ class MAPGAMEConfig:
     variation_percentage: float = 0.3
     crossplay_percentage: float = 0.3
     safe_mutation_percentage: float = 0.0
+    safe_mutation_on_crossplay: bool = False
+    safe_mutation_on_pg: bool = False
+    pg_safe_mutation_percentage: float = 0.5
 
     # Mix mutate params
     agents_to_mutate: int = 1
@@ -31,6 +34,7 @@ class MAPGAMEConfig:
     safe_mut_mag: float = 0.1
     safe_mut_val_bound: float = 1000.0
     safe_mut_noise: bool = False
+
 
     num_critic_training_steps: int = 300
     num_pg_training_steps: int = 100
@@ -84,6 +88,11 @@ class MAPGAMEEmitter(MultiEmitter):
             batch_size=config.batch_size,
             soft_tau_update=config.soft_tau_update,
             policy_delay=config.policy_delay,
+            safe_mut_mag=config.safe_mut_mag,
+            safe_mut_val_bound=config.safe_mut_val_bound,
+            safe_mut_noise=config.safe_mut_noise,
+            safe_mutation_on_pg=config.safe_mutation_on_pg,
+            safe_mutation_percentage=config.pg_safe_mutation_percentage
         )
 
         # define the quality emitter
@@ -105,7 +114,7 @@ class MAPGAMEEmitter(MultiEmitter):
             )
 
         elif self._config.emitter_type == "safe_mut":
-            if self._config.crossplay_percentage == 0:
+            if self._config.crossplay_percentage == 0 and not self._config.safe_mutation_on_crossplay:
                 raise ValueError(
                     "For 'safe_mut' emitter_type, 'safe_mutation_percentage' must be non-zero."
                 )
@@ -124,7 +133,8 @@ class MAPGAMEEmitter(MultiEmitter):
                 safe_mut_val_bound=self._config.safe_mut_val_bound,
                 safe_mut_noise=self._config.safe_mut_noise,
                 env=env,
-                policy_network=policy_network
+                policy_network=policy_network,
+                safe_mutation_on_crossplay=self._config.safe_mutation_on_crossplay
             )
 
         elif self._config.emitter_type == "role_preserving":

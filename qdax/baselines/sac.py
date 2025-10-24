@@ -619,7 +619,7 @@ class SAC:
             alpha_params,
             alpha_optimizer_state,
             alpha_loss,
-            random_key,
+            random_key, 
         ) = self._update_alpha(
             alpha_lr=self._config.learning_rate,
             training_state=training_state,

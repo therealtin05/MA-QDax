@@ -19,6 +19,7 @@ from qdax.core.neuroevolution.losses.matd3_loss import make_matd3_loss_fn
 from qdax.core.neuroevolution.networks.networks import QModule
 from qdax.environments.multi_agent_wrappers import MultiAgentBraxWrapper
 from qdax.types import Descriptor, ExtraScores, Fitness, Genotype, Params, RNGKey
+from qdax.core.emitters.mutation_operators import proximal_mutation
 
 from qdax.core.neuroevolution.networks.networks import MLP, QModule
 
@@ -43,7 +44,14 @@ class QualityMAPGConfig:
     batch_size: int = 256
     soft_tau_update: float = 0.005
     policy_delay: int = 2
-    max_grad_norm: float = 30.0
+    max_grad_norm: float = 1000.0
+
+    # Safe mutation
+    safe_mutation_on_pg: bool = False
+    safe_mutation_percentage: float = 0.5
+    safe_mut_mag: float = 0.1
+    safe_mut_val_bound: float = 1000.0
+    safe_mut_noise: bool = False
 
 class QualityMAPGEmitterState(EmitterState):
     """Contains training state for the learner."""
@@ -241,6 +249,11 @@ class QualityMAPGEmitter(Emitter):
             offspring_actor,
         )
 
+        if self._config.safe_mutation_on_pg:
+            genotypes, random_key = self._apply_partial_safe_mutation(
+                genotypes, emitter_state, random_key
+            )
+
         return genotypes, random_key, jnp.array(0)
 
     @partial(
@@ -286,6 +299,94 @@ class QualityMAPGEmitter(Emitter):
             The parameters of the actor.
         """
         return emitter_state.actor_params
+
+    @partial(jax.jit, static_argnames=("self",))
+    def _apply_partial_safe_mutation(
+        self,
+        genotypes: Genotype,
+        emitter_state: QualityMAPGEmitterState,
+        random_key: RNGKey,
+    ) -> Tuple[Genotype, RNGKey]:
+        """Apply safe mutation to only a percentage of genotypes to save VRAM."""
+        
+        # Get batch size from first agent's genotypes
+        batch_size = jax.tree_util.tree_leaves(genotypes[0])[0].shape[0]
+        
+        # Calculate how many genotypes to mutate
+        num_to_mutate = int(batch_size * self._config.safe_mutation_percentage)
+        
+        if num_to_mutate == 0:
+            return genotypes, random_key
+        
+        # Randomly select indices to mutate (this is more memory efficient)
+        random_key, subkey = jax.random.split(random_key)
+        indices_to_mutate = jax.random.choice(
+            subkey, 
+            batch_size, 
+            shape=(num_to_mutate,), 
+            replace=False
+        )
+        
+        # Extract subset of genotypes to mutate
+        subset_genotypes = jax.tree_util.tree_map(
+            lambda x: x[indices_to_mutate], genotypes
+        )
+        
+        # Apply safe mutation to subset
+        mutated_subset, random_key = self._apply_safe_mutation_to_subset(
+            subset_genotypes, emitter_state, random_key
+        )
+        
+        # Use scatter update to put mutated genotypes back
+        def update_at_indices(original, mutated):
+            return original.at[indices_to_mutate].set(mutated)
+        
+        final_genotypes = jax.tree_util.tree_map(
+            update_at_indices,
+            genotypes,
+            mutated_subset
+        )
+        
+        return final_genotypes, random_key
+
+    @partial(jax.jit, static_argnames=("self",))
+    def _apply_safe_mutation_to_subset(
+        self,
+        subset_genotypes: Genotype,
+        emitter_state: QualityMAPGEmitterState,
+        random_key: RNGKey,
+    ) -> Tuple[Genotype, RNGKey]:
+        """Apply safe mutation to a subset of genotypes."""
+        
+        subset_batch_size = jax.tree_util.tree_leaves(subset_genotypes[0])[0].shape[0]
+        
+        # Sample transitions (use smaller batch size for efficiency)
+        safe_mutation_batch_size = min(self._config.batch_size, subset_batch_size)
+        transitions, random_key = emitter_state.replay_buffer.sample(
+            random_key, safe_mutation_batch_size
+        )
+
+        # Unflatten observations
+        obs = jax.vmap(self.unflatten_obs_fn)(transitions.obs)
+        
+        # Apply safe mutation to each agent's subset
+        perturbed_genotypes = []
+        for agent_idx, (agent_params, agent_obs) in enumerate(
+            zip(subset_genotypes, obs.values())
+        ):
+            new_agent_params, random_key = proximal_mutation(
+                agent_params, 
+                random_key, 
+                self._policy_network[agent_idx].apply, 
+                agent_obs,
+                mutation_mag=self._config.safe_mut_mag, 
+                minval=-self._config.safe_mut_val_bound,
+                maxval=self._config.safe_mut_val_bound, 
+                mutation_noise=self._config.safe_mut_noise
+            )
+            perturbed_genotypes.append(new_agent_params)
+
+        return perturbed_genotypes, random_key
 
     @partial(jax.jit, static_argnames=("self",))
     def state_update(
@@ -673,3 +774,12 @@ class QualityMAPGEmitter(Emitter):
     @partial(jax.jit, static_argnames=("self"))
     def create_policy_fns(self, index, params, obs):
         return jax.lax.switch(index, [pol.apply for pol in self._policy_network.values()], params, obs)
+    
+
+    @partial(jax.jit, static_argnames=("self"))
+    def unflatten_obs_fn(self, global_obs: jnp.ndarray) -> dict[int, jnp.ndarray]:
+        agent_obs = {}
+        for agent_idx, obs_indices in self._env.agent_obs_mapping.items():
+                agent_obs[agent_idx] = global_obs[obs_indices]
+        
+        return agent_obs

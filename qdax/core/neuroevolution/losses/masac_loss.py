@@ -261,7 +261,7 @@ def masac_critic_loss_fn(
     q_old_action = critic_fn(critic_params, transitions.obs, transitions.actions)
     q_error = q_old_action - jnp.expand_dims(target_q, -1)
     q_error *= jnp.expand_dims(1 - transitions.truncations, -1)
-    q_loss = 0.5 * jnp.mean(jnp.square(q_error))
+    q_loss = jnp.mean(jnp.square(q_error))
 
     return q_loss
 

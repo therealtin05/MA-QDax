@@ -268,6 +268,10 @@ class ProximalMultiAgentEmitter(Emitter):
         env: MultiAgentBraxWrapper,
         policy_network: Dict[int, MLP],
 
+
+        # Parameter for chaining 
+        safe_mutation_on_crossplay: bool = False,  # Apply safe mutation to crossplay results
+
         memory_size: int = 200_000,
         transition_batch_size: int = 256,
         role_preserving: bool = True,
@@ -294,6 +298,8 @@ class ProximalMultiAgentEmitter(Emitter):
         self._transition_batch_size = transition_batch_size
         self._memory_size = memory_size
 
+        # Parameter for chaining
+        self.safe_mutation_on_crossplay = safe_mutation_on_crossplay
 
     def init(self, init_genotypes: Genotype, random_key: RNGKey) -> Tuple[ProximalMutationEmitterState, RNGKey]:
         observation_size = self._env.observation_size
@@ -393,6 +399,38 @@ class ProximalMultiAgentEmitter(Emitter):
             x1, random_key = repertoire.sample(random_key, n_mutation)
             x_mutation, random_key = self._mutation_fn(x1, random_key)
 
+        if n_crossplay > 0:
+            # TODO: this is not efficient, we should sample only once
+
+            x_crossplay, random_key = repertoire.sample(random_key, n_crossplay)
+
+            
+            for i in agent_indices:
+                x1, random_key = repertoire.sample(random_key, n_crossplay)
+
+                x_crossplay[i] = (
+                    x1[i]
+                    if self._role_preserving
+                    else x1[random.randint(0, self._num_agents - 1)]
+                )
+
+            if self.safe_mutation_on_crossplay: # apply safe mutation on top of x_crossplay
+
+                perturbed_x_crossplay = []
+                transitions, random_key = emitter_state.observation_buffer.sample(random_key, self._transition_batch_size)
+
+                obs = jax.vmap(self.unflatten_obs_fn)(transitions.obs)
+                for agent_idx, (p, o) in enumerate(
+                    zip(x_crossplay, obs.values())
+                ):
+                    new_x_i, random_key = proximal_mutation(p, random_key, self._policy_network[agent_idx].apply, o,
+                                                            mutation_mag=self._safe_mut_mag, minval=-self._safe_mut_val_bound,
+                                                            maxval=self._safe_mut_val_bound, mutation_noise=self._safe_mut_noise)
+                    perturbed_x_crossplay.append(new_x_i)
+
+                x_crossplay = perturbed_x_crossplay
+
+
         if n_safe_mutation > 0:
             x1, random_key = repertoire.sample(random_key, n_safe_mutation)
 
@@ -409,20 +447,6 @@ class ProximalMultiAgentEmitter(Emitter):
                 x_safe_mutation.append(new_x_i)
 
 
-        if n_crossplay > 0:
-            # TODO: this is not efficient, we should sample only once
-
-            x_crossplay, random_key = repertoire.sample(random_key, n_crossplay)
-
-            
-            for i in agent_indices:
-                x1, random_key = repertoire.sample(random_key, n_crossplay)
-
-                x_crossplay[i] = (
-                    x1[i]
-                    if self._role_preserving
-                    else x1[random.randint(0, self._num_agents - 1)]
-                )
 
         x_values = [x for x in [x_variation, x_mutation, x_safe_mutation, x_crossplay] if x is not None]
         genotypes = jax.tree_util.tree_map(

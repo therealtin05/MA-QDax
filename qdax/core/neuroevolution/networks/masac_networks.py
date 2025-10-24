@@ -20,14 +20,14 @@ class MultiAgentCritic(nn.Module):
         value_1 = MLP(
             layer_sizes=self.hidden_layer_size + (1,),
             kernel_init=kernel_init,
-            activation=nn.relu,
+            activation=nn.leaky_relu,
             kernel_init_final=nn.initializers.orthogonal(0.01)
         )(input_)
 
         value_2 = MLP(
             layer_sizes=self.hidden_layer_size + (1,),
             kernel_init=kernel_init,
-            activation=nn.relu,
+            activation=nn.leaky_relu,
             kernel_init_final=nn.initializers.orthogonal(0.01)
         )(input_)
 
@@ -47,7 +47,7 @@ class MultiagentPolicy(nn.Module):
         trunk = MLP(
             layer_sizes=self.hidden_layer_size,
             # kernel_init=kernel_init,
-            activation=nn.relu,
+            activation=nn.leaky_relu,
         )(obs)
         
         # Mean head

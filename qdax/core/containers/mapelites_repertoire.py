@@ -169,7 +169,7 @@ class MapElitesRepertoire(flax.struct.PyTreeNode):
             return flatten_genotype
 
         # flatten all the genotypes
-        flat_genotypes, _ = ravel_pytree(self.genotypes)
+        flat_genotypes = jax.vmap(flatten_genotype)(self.genotypes)
 
         # save data
         jnp.save(path + "genotypes.npy", flat_genotypes)
@@ -191,7 +191,7 @@ class MapElitesRepertoire(flax.struct.PyTreeNode):
         """
 
         flat_genotypes = jnp.load(path + "genotypes.npy")
-        genotypes = reconstruction_fn(flat_genotypes)
+        genotypes = jax.vmap(reconstruction_fn)(flat_genotypes)
 
         fitnesses = jnp.load(path + "fitnesses.npy")
         descriptors = jnp.load(path + "descriptors.npy")
@@ -451,4 +451,172 @@ class MapElitesRepertoire(flax.struct.PyTreeNode):
             fitnesses=default_fitnesses,
             descriptors=default_descriptors,
             centroids=centroids,
+        )
+
+
+class MultiAgentMapElitesRepertoire(MapElitesRepertoire):
+    def save(self, path: str = "./") -> None:
+        """Saves the repertoire on disk in the form of .npy files.
+
+        Flattens the genotypes to store it with .npy format. Supposes that
+        a user will have access to the reconstruction function when loading
+        the genotypes.
+
+        Args:
+            path: Path where the data will be saved. Defaults to "./".
+        """
+
+        def flatten_genotype(genotype: Genotype) -> jnp.ndarray:
+            flatten_genotype, _ = ravel_pytree(genotype)
+            return flatten_genotype
+
+        # flatten all genotype and store by single agent
+        for i, g in enumerate(self.genotypes):
+            flat_genotypes = jax.vmap(flatten_genotype)(g)
+            jnp.save(path + f"genotypes_agent_{i}.npy", flat_genotypes)
+
+        # save data
+        jnp.save(path + "fitnesses.npy", self.fitnesses)
+        jnp.save(path + "descriptors.npy", self.descriptors)
+        jnp.save(path + "centroids.npy", self.centroids)
+
+
+    @classmethod
+    def load(cls, reconstruction_fn: List[Callable[jnp.ndarray, Genotype]], path: str = "./") -> MapElitesRepertoire:
+        """Loads a MAP Elites Repertoire.
+
+        Args:
+            reconstruction_fn: Function to reconstruct a PyTree
+                from a flat array.
+            path: Path where the data is saved. Defaults to "./".
+
+        Returns:
+            A MAP Elites Repertoire.
+        """
+
+        genotypes = []
+        for i, rec_func in enumerate(reconstruction_fn):
+            print(f"currenty load agent {i}")
+            flat_genotypes = jnp.load(path + f"genotypes_agent_{i}.npy")
+            genotypes.append(jax.vmap(rec_func)(flat_genotypes))
+
+        fitnesses = jnp.load(path + "fitnesses.npy")
+        descriptors = jnp.load(path + "descriptors.npy")
+        centroids = jnp.load(path + "centroids.npy")
+
+        return cls(
+            genotypes=genotypes,
+            fitnesses=fitnesses,
+            descriptors=descriptors,
+            centroids=centroids,
+        )
+
+
+    @jax.jit
+    def add(
+        self,
+        batch_of_genotypes: Genotype,
+        batch_of_descriptors: Descriptor,
+        batch_of_fitnesses: Fitness,
+        batch_of_extra_scores: Optional[ExtraScores] = None,
+        operation_history: Optional[jnp.ndarray] = None,
+        qd_offset: float = 0.0,
+    ) -> tuple[MultiAgentMapElitesRepertoire, dict[str, jnp.ndarray]]:
+        """
+        Add a batch of elements to the repertoire.
+
+        Args:
+            batch_of_genotypes: a batch of genotypes to be added to the repertoire.
+                Similarly to the self.genotypes argument, this is a PyTree in which
+                the leaves have a shape (batch_size, num_features)
+            batch_of_descriptors: an array that contains the descriptors of the
+                aforementioned genotypes. Its shape is (batch_size, num_descriptors)
+            batch_of_fitnesses: an array that contains the fitnesses of the
+                aforementioned genotypes. Its shape is (batch_size,)
+            batch_of_extra_scores: unused tree that contains the extra_scores of
+                aforementioned genotypes.
+
+        Returns:
+            The updated MAP-Elites repertoire.
+        """
+
+        batch_of_indices = get_cells_indices(batch_of_descriptors, self.centroids)
+        batch_of_indices = jnp.expand_dims(batch_of_indices, axis=-1)
+        batch_of_fitnesses = jnp.expand_dims(batch_of_fitnesses, axis=-1)
+
+        num_centroids = self.centroids.shape[0]
+
+        # get fitness segment max
+        best_fitnesses = jax.ops.segment_max(
+            batch_of_fitnesses,
+            batch_of_indices.astype(jnp.int32).squeeze(axis=-1),
+            num_segments=num_centroids,
+        )
+
+        cond_values = jnp.take_along_axis(best_fitnesses, batch_of_indices, 0)
+
+        # put dominated fitness to -jnp.inf
+        batch_of_fitnesses = jnp.where(
+            batch_of_fitnesses == cond_values, batch_of_fitnesses, -jnp.inf
+        )
+
+        # get addition condition
+        repertoire_fitnesses = jnp.expand_dims(self.fitnesses, axis=-1)
+        current_fitnesses = jnp.take_along_axis(
+            repertoire_fitnesses, batch_of_indices, 0
+        )
+        addition_condition = batch_of_fitnesses > current_fitnesses
+
+        # aggregate successful operations
+        op_count = None
+        fitness_improvement = None
+        if operation_history is not None:
+            # Mark operations that were not successful
+            operation_filtered = jnp.where(
+                addition_condition.squeeze(axis=-1), operation_history, 3
+            )
+            # Get the number of times each operation was successful
+            op_count = jnp.bincount(operation_filtered, length=3)
+            # Fitness delta
+            fitness_delta = jnp.nan_to_num(
+                batch_of_fitnesses - current_fitnesses,
+                posinf=qd_offset + batch_of_fitnesses,
+            ).squeeze(axis=-1)
+            # Get total fitness improvement by operation type
+            fitness_improvement = jnp.bincount(
+                operation_filtered,
+                weights=fitness_delta,
+                length=3,
+            )
+
+        # assign fake position when relevant : num_centroids is out of bound
+        batch_of_indices = jnp.where(
+            addition_condition, batch_of_indices, num_centroids
+        )
+
+        # create new repertoire
+        new_repertoire_genotypes = jax.tree_util.tree_map(
+            lambda repertoire_genotypes, new_genotypes: repertoire_genotypes.at[
+                batch_of_indices.squeeze(axis=-1)
+            ].set(new_genotypes),
+            self.genotypes,
+            batch_of_genotypes,
+        )
+
+        # compute new fitness and descriptors
+        new_fitnesses = self.fitnesses.at[batch_of_indices.squeeze(axis=-1)].set(
+            batch_of_fitnesses.squeeze(axis=-1)
+        )
+        new_descriptors = self.descriptors.at[batch_of_indices.squeeze(axis=-1)].set(
+            batch_of_descriptors
+        )
+
+        return (
+            MultiAgentMapElitesRepertoire(
+                genotypes=new_repertoire_genotypes,
+                fitnesses=new_fitnesses,
+                descriptors=new_descriptors,
+                centroids=self.centroids,
+            ),
+            {"op_count": op_count, "fitness_improvement": fitness_improvement},
         )

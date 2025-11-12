@@ -1,3 +1,14 @@
+"""Implements the PG Emitter from PGA-ME algorithm in jax for brax environments,
+based on:
+https://hal.archives-ouvertes.fr/hal-03135723v2/file/PGA_MAP_Elites_GECCO.pdf
+
+The same as ma_pga_me_emitter_v2.py. The loss is now a method of the class,
+in order to mitigate the use of jax.lax.switch -> now can handle env with dif action shape
+for each agent
+
+New: use evorl buffer which does not take transtitions after the first termination
+"""
+
 from dataclasses import dataclass
 from typing import Callable, Tuple, Dict, List
 from functools import partial
@@ -5,7 +16,7 @@ from functools import partial
 import flax.linen as nn
 
 from qdax.core.emitters.multi_emitter import MultiEmitter
-from qdax.core.emitters.ma_qpg_emitter_v2 import QualityMAPGConfig, QualityMAPGEmitter
+from qdax.core.emitters.ma_qpg_emitter_v3 import QualityMAPGConfig, QualityMAPGEmitter
 from qdax.core.emitters.ma_standard_emitters import NaiveMultiAgentMixingEmitter, MultiAgentEmitter, ProximalMultiAgentEmitter
 from qdax.environments.multi_agent_wrappers import MultiAgentBraxWrapper
 from qdax.types import Params, RNGKey

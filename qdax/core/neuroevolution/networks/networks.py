@@ -13,16 +13,18 @@ class QModule(nn.Module):
 
     hidden_layer_sizes: Tuple[int, ...]
     n_critics: int = 2
+    use_layer_norm: bool = False
 
     @nn.compact
     def __call__(self, obs: jnp.ndarray, actions: jnp.ndarray) -> jnp.ndarray:
         hidden = jnp.concatenate([obs, actions], axis=-1)
         res = []
         for _ in range(self.n_critics):
-            q = networks.MLP(
+            q = MLP(
                 layer_sizes=self.hidden_layer_sizes + (1,),
                 activation=nn.relu,
                 kernel_init=jax.nn.initializers.lecun_uniform(),
+                use_layer_norm=self.use_layer_norm,
             )(hidden)
             res.append(q)
         return jnp.concatenate(res, axis=-1)
@@ -37,7 +39,7 @@ class MLP(nn.Module):
     final_activation: Optional[Callable[[jnp.ndarray], jnp.ndarray]] = None
     bias: bool = True
     kernel_init_final: Optional[Callable[..., Any]] = None
-
+    use_layer_norm: bool = False
     @nn.compact
     def __call__(self, data: jnp.ndarray) -> jnp.ndarray:
         hidden = data
@@ -51,6 +53,10 @@ class MLP(nn.Module):
                     kernel_init=self.kernel_init,
                     use_bias=self.bias,
                 )(hidden)
+
+                if self.use_layer_norm:
+                    hidden = nn.LayerNorm(use_bias=False, use_scale=False)(hidden)
+
                 hidden = self.activation(hidden)  # type: ignore
 
             else:

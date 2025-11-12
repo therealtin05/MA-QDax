@@ -8,6 +8,7 @@ def make_matd3_networks(
     action_sizes: dict[int, int],
     critic_hidden_layer_sizes: Tuple[int, ...],
     policy_hidden_layer_sizes: Tuple[int, ...],
+    use_layer_norm: bool = False,
 ) -> Tuple[Dict[int, MLP], QModule]:
     """Creates networks used by the TD3 agent.
 
@@ -28,9 +29,11 @@ def make_matd3_networks(
         agent_idx: MLP(
         layer_sizes=policy_hidden_layer_sizes + (action_size,),
         final_activation=jnp.tanh,
+        use_layer_norm=use_layer_norm,
     ) for agent_idx, action_size in action_sizes.items()
     }
 
-    q_network = QModule(n_critics=2, hidden_layer_sizes=critic_hidden_layer_sizes)
+    q_network = QModule(n_critics=2, hidden_layer_sizes=critic_hidden_layer_sizes,
+                        use_layer_norm=use_layer_norm)
 
     return (policy_network, q_network)

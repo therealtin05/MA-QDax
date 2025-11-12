@@ -21,8 +21,11 @@ from qdax.core.neuroevolution.buffers.buffer import (
 )
 from qdax.core.neuroevolution.losses.masac_loss import (
     masac_alpha_loss_fn,
+    masac_alpha_loss_fn_per_agent,
     masac_critic_loss_fn,
+    masac_critic_loss_fn_per_agent,
     masac_policy_loss_fn,
+    masac_policy_loss_fn_per_agent,
     masac_policy_loss_fn_v2
 )
 from qdax.core.neuroevolution.mdp_utils import TrainingState, get_first_episode
@@ -52,8 +55,8 @@ class MASacTrainingState(TrainingState):
     policy_params: List[Params]
     critic_optimizer_state: optax.OptState
     critic_params: Params
-    alpha_optimizer_state: optax.OptState
-    alpha_param: jnp.ndarray
+    alpha_optimizer_state: List[optax.OptState]  # Changed: Now a list
+    alpha_params: List[jnp.ndarray]  # Changed: Now a list (renamed from alpha_param)
     target_critic_params: Params
     random_key: RNGKey
     steps: jnp.ndarray
@@ -79,8 +82,11 @@ class MASacConfig:
     fix_alpha: bool = False
     target_entropy_scale: float = 0.5
     policy_delay: int = 4
-    max_grad_norm: float = 30.0
+    max_grad_norm: float = 1000.0
     independent_std: bool = True
+    use_layer_norm: bool = False
+    use_per_agent_alpha: bool = True  # NEW: Toggle between shared and per-agent alpha
+
 
 class MASAC:
     def __init__(self, config: MASacConfig, action_sizes: Dict[int, int]) -> None:
@@ -93,6 +99,7 @@ class MASAC:
             critic_hidden_layer_size=self._config.critic_hidden_layer_size,
             policy_hidden_layer_size=self._config.policy_hidden_layer_size,
             independent_std=self._config.independent_std,
+            use_layer_norm=self._config.use_layer_norm,
         )
 
         self._parametric_action_distribution = []
@@ -144,23 +151,50 @@ class MASAC:
         target_critic_params = jax.tree_util.tree_map(
             lambda x: jnp.asarray(x.copy()), critic_params
         )
-
-        # Initialize optimizers with gradient clipping
-        grad_clip = optax.clip_by_global_norm(self._config.max_grad_norm)
         
-        # Policy optimizers (one per agent)
-        policy_optimizer_state = []
-        for agent_idx, params in enumerate(policy_params):
-            optimizer = optax.chain(grad_clip, optax.adam(learning_rate=1.0))
-            policy_optimizer_state.append(optimizer.init(params))
+        if self._config.max_grad_norm:
+            # Initialize optimizers with gradient clipping
+            grad_clip = optax.clip_by_global_norm(self._config.max_grad_norm)
+            
+            # Policy optimizers (one per agent)
+            policy_optimizer_state = []
+            for agent_idx, params in enumerate(policy_params):
+                optimizer = optax.chain(grad_clip, optax.adam(learning_rate=1.0))
+                policy_optimizer_state.append(optimizer.init(params))
+            # Critic optimizer
+            critic_optimizer = optax.chain(grad_clip, optax.adam(learning_rate=1.0))
+            critic_optimizer_state = critic_optimizer.init(critic_params)
+        else:
+            # Policy optimizers (one per agent)
+            policy_optimizer_state = []
+            for agent_idx, params in enumerate(policy_params):
+                optimizer = optax.adam(learning_rate=1.0)
+                policy_optimizer_state.append(optimizer.init(params))
+            critic_optimizer = optax.adam(learning_rate=1.0)
+            critic_optimizer_state = critic_optimizer.init(critic_params)
 
-        # Critic optimizer
-        critic_optimizer = optax.chain(grad_clip, optax.adam(learning_rate=1.0))
-        critic_optimizer_state = critic_optimizer.init(critic_params)
-
-        alpha_param = jnp.log(self._config.alpha_init)
-        alpha_optimizer = optax.chain(grad_clip, optax.adam(learning_rate=1.0))
-        alpha_optimizer_state = alpha_optimizer.init(alpha_param)
+        # Initialize alpha parameters (per-agent or shared)
+        if self._config.use_per_agent_alpha:
+            # Per-agent alpha
+            alpha_params = [jnp.log(self._config.alpha_init) for _ in range(self._config.num_agents)]
+            alpha_optimizer_state = []
+            
+            for alpha_param in alpha_params:
+                if self._config.max_grad_norm:
+                    grad_clip = optax.clip_by_global_norm(self._config.max_grad_norm)
+                    alpha_optimizer = optax.chain(grad_clip, optax.adam(learning_rate=1.0))
+                else:
+                    alpha_optimizer = optax.adam(learning_rate=1.0)
+                alpha_optimizer_state.append(alpha_optimizer.init(alpha_param))
+        else:
+            # Shared alpha (backward compatible)
+            alpha_params = [jnp.log(self._config.alpha_init)]
+            if self._config.max_grad_norm:
+                grad_clip = optax.clip_by_global_norm(self._config.max_grad_norm)
+                alpha_optimizer = optax.chain(grad_clip, optax.adam(learning_rate=1.0))
+            else:
+                alpha_optimizer = optax.adam(learning_rate=1.0)
+            alpha_optimizer_state = [alpha_optimizer.init(alpha_params[0])]
 
         # create and retrieve the training state
         training_state = MASacTrainingState(
@@ -169,7 +203,7 @@ class MASAC:
             critic_optimizer_state=critic_optimizer_state,
             critic_params=critic_params,
             alpha_optimizer_state=alpha_optimizer_state,
-            alpha_param=alpha_param,
+            alpha_params=alpha_params,
             target_critic_params=target_critic_params,
             normalization_running_stats=RunningMeanStdState(
                 mean=jnp.zeros(observation_size_raw),
@@ -426,29 +460,52 @@ class MASAC:
                 obs=normalized_obs, next_obs=normalized_next_obs
             )
 
+        # Get alpha values
+        if self._config.use_per_agent_alpha:
+            alphas = [jnp.exp(alpha_param) for alpha_param in training_state.alpha_params]
+        else:
+            alpha = jnp.exp(training_state.alpha_params[0])
+            alphas = alpha  # For shared alpha
+
         # update critic
         random_key, subkey = jax.random.split(random_key)
-        alpha_param = training_state.alpha_param
-        alpha = jnp.exp(alpha_param)
 
+        if self._config.use_per_agent_alpha:
+            critic_loss, critic_gradient = jax.value_and_grad(masac_critic_loss_fn_per_agent)(
+                training_state.critic_params,
+                policy_fns_apply=policy_fns_apply,
+                critic_fn=self._critic.apply,
+                parametric_action_distributions=self._parametric_action_distribution,
+                unflatten_obs_fn=unflatten_obs_fn_vmap,
+                reward_scaling=self._config.reward_scaling,
+                discount=self._config.discount,
+                policy_params=training_state.policy_params,
+                target_critic_params=training_state.target_critic_params,
+                alphas=alphas,  # List of alphas
+                transitions=transitions,
+                random_key=subkey,
+            )
+        else:
+            critic_loss, critic_gradient = jax.value_and_grad(masac_critic_loss_fn)(
+                training_state.critic_params,
+                policy_fns_apply=policy_fns_apply,
+                critic_fn=self._critic.apply,
+                parametric_action_distributions=self._parametric_action_distribution,
+                unflatten_obs_fn=unflatten_obs_fn_vmap,
+                reward_scaling=self._config.reward_scaling,
+                discount=self._config.discount,
+                policy_params=training_state.policy_params,
+                target_critic_params=training_state.target_critic_params,
+                alpha=alphas,  # Single alpha
+                transitions=transitions,
+                random_key=subkey,
+            )
 
-        critic_loss, critic_gradient = jax.value_and_grad(masac_critic_loss_fn)(
-            training_state.critic_params,
-            policy_fns_apply=policy_fns_apply,
-            critic_fn=self._critic.apply,
-            parametric_action_distributions=self._parametric_action_distribution,
-            unflatten_obs_fn=unflatten_obs_fn_vmap,
-            reward_scaling=self._config.reward_scaling,
-            discount=self._config.discount,
-            policy_params=training_state.policy_params,
-            target_critic_params=training_state.target_critic_params,
-            alpha=alpha, 
-            transitions=transitions,
-            random_key=subkey,
-        )
-
-        grad_clip = optax.clip_by_global_norm(self._config.max_grad_norm)
-        critic_optimizer = optax.chain(grad_clip, optax.adam(learning_rate=self._config.critic_learning_rate))
+        if self._config.max_grad_norm:
+            grad_clip = optax.clip_by_global_norm(self._config.max_grad_norm)
+            critic_optimizer = optax.chain(grad_clip, optax.adam(learning_rate=self._config.critic_learning_rate))
+        else:
+            critic_optimizer = optax.adam(learning_rate=self._config.critic_learning_rate)
         critic_updates, critic_optimizer_state = critic_optimizer.update(
             critic_gradient, training_state.critic_optimizer_state
         )
@@ -463,62 +520,130 @@ class MASAC:
             critic_params,
         )
 
-        def update_policy_and_alpha_step(random_key) -> Tuple[List[Params], List[optax.OptState], jnp.ndarray, optax.OptState, Dict[str, List], RNGKey]:
+        def update_policy_and_alpha_step(random_key) -> Tuple[List[Params], List[optax.OptState], List[jnp.ndarray], List[optax.OptState], Dict[str, any], RNGKey]:
             
             # update alpha (temperature parameter)
-
             alpha_optimizer_state = training_state.alpha_optimizer_state
+            alpha_params = training_state.alpha_params
             alpha_losses = []
-            alpha_param = training_state.alpha_param
+
             if not self._config.fix_alpha:
                 random_key, subkey = jax.random.split(random_key)
-                alpha_losses, alpha_gradients = jax.value_and_grad(masac_alpha_loss_fn)(
-                    alpha_param,
-                    policy_fns_apply=policy_fns_apply,
-                    parametric_action_distributions=self._parametric_action_distribution,
-                    unflatten_obs_fn=unflatten_obs_fn_vmap,
-                    action_sizes=self._action_sizes,
-                    policy_params=training_state.policy_params,
-                    transitions=transitions,
-                    random_key=subkey,
-                    target_entropy_scale=self._config.target_entropy_scale
-                )
+                
+                if self._config.use_per_agent_alpha:
+                    # Per-agent alpha update
+                    alpha_losses, alpha_gradients = masac_alpha_loss_fn_per_agent(
+                        alpha_params,
+                        policy_fns_apply=policy_fns_apply,
+                        parametric_action_distributions=self._parametric_action_distribution,
+                        unflatten_obs_fn=unflatten_obs_fn_vmap,
+                        action_sizes=self._action_sizes,
+                        policy_params=training_state.policy_params,
+                        transitions=transitions,
+                        random_key=subkey,
+                        target_entropy_scale=self._config.target_entropy_scale
+                    )
 
-                # Update alpha parameters for each agent
-                grad_clip = optax.clip_by_global_norm(self._config.max_grad_norm)
-                alpha_optimizer = optax.chain(grad_clip, optax.adam(learning_rate=self._config.alpha_learning_rate))
+                    # Update alpha parameters for each agent
+                    new_alpha_params = []
+                    new_alpha_optimizer_state = []
+                    
+                    if self._config.max_grad_norm:
+                        grad_clip = optax.clip_by_global_norm(self._config.max_grad_norm)
+                        alpha_optimizer = optax.chain(grad_clip, optax.adam(learning_rate=self._config.alpha_learning_rate))
+                    else:
+                        alpha_optimizer = optax.adam(learning_rate=self._config.alpha_learning_rate)
 
-                alpha_updates, alpha_optimizer_state = alpha_optimizer.update(
-                    alpha_gradients, alpha_optimizer_state
-                )
-                alpha_param = optax.apply_updates(
-                    training_state.alpha_param, alpha_updates
-                )
-                # alpha_param = new_alpha_param
-                # alpha_optimizer_state = new_alpha_optimizer_state
+                    for agent_idx, (alpha_grad, alpha_opt_state) in enumerate(
+                        zip(alpha_gradients, alpha_optimizer_state)
+                    ):
+                        alpha_updates, updated_opt_state = alpha_optimizer.update(
+                            alpha_grad, alpha_opt_state
+                        )
+                        updated_alpha = optax.apply_updates(
+                            alpha_params[agent_idx], alpha_updates
+                        )
+                        new_alpha_params.append(updated_alpha)
+                        new_alpha_optimizer_state.append(updated_opt_state)
+                    
+                    alpha_params = new_alpha_params
+                    alpha_optimizer_state = new_alpha_optimizer_state
+
+                else:
+                    # Shared alpha update
+                    alpha_loss, alpha_gradient = jax.value_and_grad(masac_alpha_loss_fn)(
+                        alpha_params[0],
+                        policy_fns_apply=policy_fns_apply,
+                        parametric_action_distributions=self._parametric_action_distribution,
+                        unflatten_obs_fn=unflatten_obs_fn_vmap,
+                        action_sizes=self._action_sizes,
+                        policy_params=training_state.policy_params,
+                        transitions=transitions,
+                        random_key=subkey,
+                        target_entropy_scale=self._config.target_entropy_scale
+                    )
+                    alpha_losses = [alpha_loss]
+
+                    if self._config.max_grad_norm:
+                        grad_clip = optax.clip_by_global_norm(self._config.max_grad_norm)
+                        alpha_optimizer = optax.chain(grad_clip, optax.adam(learning_rate=self._config.alpha_learning_rate))
+                    else:
+                        alpha_optimizer = optax.adam(learning_rate=self._config.alpha_learning_rate)
+
+                    alpha_updates, alpha_optimizer_state_new = alpha_optimizer.update(
+                        alpha_gradient, alpha_optimizer_state[0]
+                    )
+                    alpha_param = optax.apply_updates(alpha_params[0], alpha_updates)
+                    alpha_params = [alpha_param]
+                    alpha_optimizer_state = [alpha_optimizer_state_new]
             else:
-                alpha_losses = jnp.array(0.0)
+                alpha_losses = [jnp.array(0.0)] * (self._config.num_agents if self._config.use_per_agent_alpha else 1)
+
+            # Get current alpha values for policy update
+            if self._config.use_per_agent_alpha:
+                current_alphas = [jnp.exp(ap) for ap in alpha_params]
+                alpha_for_policy = current_alphas
+            else:
+                current_alpha = jnp.exp(alpha_params[0])
+                alpha_for_policy = current_alpha
 
             # update actors
             random_key, subkey = jax.random.split(random_key)
-            policy_losses, policy_gradients = masac_policy_loss_fn(
-                policy_params=training_state.policy_params,
-                policy_fns_apply=policy_fns_apply,
-                critic_fn=self._critic.apply,
-                parametric_action_distributions=self._parametric_action_distribution,
-                unflatten_obs_fn=unflatten_obs_fn_vmap,
-                # unflatten_actions_fn=unflatten_actions_fn_vmap,
-                critic_params=critic_params,
-                alpha=alpha,
-                transitions=transitions,
-                random_key=subkey,
-            )
+
+            if self._config.use_per_agent_alpha:
+                policy_losses, policy_gradients = masac_policy_loss_fn_per_agent(
+                    policy_params=training_state.policy_params,
+                    policy_fns_apply=policy_fns_apply,
+                    critic_fn=self._critic.apply,
+                    parametric_action_distributions=self._parametric_action_distribution,
+                    unflatten_obs_fn=unflatten_obs_fn_vmap,
+                    critic_params=critic_params,
+                    alphas=alpha_for_policy,
+                    transitions=transitions,
+                    random_key=subkey,
+                )
+            else:
+                policy_losses, policy_gradients = masac_policy_loss_fn(
+                    policy_params=training_state.policy_params,
+                    policy_fns_apply=policy_fns_apply,
+                    critic_fn=self._critic.apply,
+                    parametric_action_distributions=self._parametric_action_distribution,
+                    unflatten_obs_fn=unflatten_obs_fn_vmap,
+                    critic_params=critic_params,
+                    alpha=alpha_for_policy,
+                    transitions=transitions,
+                    random_key=subkey,
+                )
 
             # Update policy parameters for each agent
             new_policy_params = []
             new_policy_optimizer_state = []
-            grad_clip = optax.clip_by_global_norm(self._config.max_grad_norm)
-            policy_optimizer = optax.chain(grad_clip, optax.adam(learning_rate=self._config.policy_learning_rate))
+
+            if self._config.max_grad_norm:
+                grad_clip = optax.clip_by_global_norm(self._config.max_grad_norm)
+                policy_optimizer = optax.chain(grad_clip, optax.adam(learning_rate=self._config.policy_learning_rate))
+            else:
+                policy_optimizer = optax.adam(learning_rate=self._config.policy_learning_rate)
 
             for agent_idx, (pol_grad, pol_opt_state) in enumerate(
                 zip(policy_gradients, training_state.policy_optimizer_state)
@@ -532,21 +657,26 @@ class MASAC:
                 new_policy_params.append(updated_params)
                 new_policy_optimizer_state.append(updated_opt_state)
 
-            actor_and_alpha_losses = {"policy_losses": policy_losses, "alpha_loss": alpha_losses}
+            actor_and_alpha_losses = {
+                "policy_losses": policy_losses, 
+                "alpha_losses": alpha_losses
+            }
             
-            return new_policy_params, new_policy_optimizer_state, alpha_param, alpha_optimizer_state, actor_and_alpha_losses
+            return new_policy_params, new_policy_optimizer_state, alpha_params, alpha_optimizer_state, actor_and_alpha_losses
 
         current_policy_and_alpha_state = (
             training_state.policy_params,
             training_state.policy_optimizer_state,
-            training_state.alpha_param,
+            training_state.alpha_params,
             training_state.alpha_optimizer_state,
-            {"policy_losses": [jnp.array(0.0) for _ in range(self._config.num_agents)], 
-             "alpha_loss": jnp.array(0.0)}
+            {
+                "policy_losses": [jnp.array(0.0) for _ in range(self._config.num_agents)], 
+                "alpha_losses": [jnp.array(0.0)] * (self._config.num_agents if self._config.use_per_agent_alpha else 1)
+            }
         )
         
         random_key, subkey = jax.random.split(random_key)
-        new_policy_params, new_policy_optimizer_state, new_alpha_param, new_alpha_optimizer_state, actor_and_alpha_losses = jax.lax.cond(
+        new_policy_params, new_policy_optimizer_state, new_alpha_params, new_alpha_optimizer_state, actor_and_alpha_losses = jax.lax.cond(
             training_state.steps % self._config.policy_delay == 0,
             lambda _: update_policy_and_alpha_step(subkey),
             lambda _: current_policy_and_alpha_state,
@@ -560,18 +690,24 @@ class MASAC:
             critic_optimizer_state=critic_optimizer_state,
             critic_params=critic_params,
             alpha_optimizer_state=new_alpha_optimizer_state,
-            alpha_param=new_alpha_param,
+            alpha_params=new_alpha_params,
             normalization_running_stats=training_state.normalization_running_stats,
             target_critic_params=target_critic_params,
             random_key=random_key,
             steps=training_state.steps + 1,
         )
 
+        # Prepare metrics
+        if self._config.use_per_agent_alpha:
+            alpha_values = [jnp.exp(ap) for ap in new_alpha_params]
+        else:
+            alpha_values = [jnp.exp(new_alpha_params[0])]
+
         metrics = {
             "actor_losses": actor_and_alpha_losses["policy_losses"],  # List of losses per agent
             "critic_loss": critic_loss,
-            "alpha_loss": actor_and_alpha_losses["alpha_loss"],  # Single alpha loss across agent
-            "alpha": alpha,  # Current alpha values
+            "alpha_losses": actor_and_alpha_losses["alpha_losses"],  # List or single value
+            "alphas": alpha_values,  # Current alpha values (list)
             "obs_mean": jnp.mean(transitions.obs),
             "obs_std": jnp.std(transitions.obs),
         }

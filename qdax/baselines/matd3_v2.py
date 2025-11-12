@@ -1,3 +1,8 @@
+"""
+Pretty much the same as v1, however the loss is now a method of the class
+to avoid passing the apply functions into the loss, therefore avoid the use of jax.lax.switch
+"""
+
 import jax
 import jax.numpy as jnp
 import optax
@@ -16,7 +21,6 @@ from qdax.core.neuroevolution.mdp_utils import TrainingState, get_first_episode
 from qdax.core.neuroevolution.losses.matd3_loss import (
     matd3_critic_loss_fn,
     matd3_policy_loss_fn,
-    matd3_policy_loss_fn_v2
 )
 from qdax.core.neuroevolution.sac_td3_utils import generate_unroll
 from qdax.custom_types import (
@@ -76,9 +80,9 @@ class MATD3:
     Gradient agent (TD3), ref: https://arxiv.org/pdf/1802.09477.pdf
     """
 
-    def __init__(self, config: MATD3Config, action_sizes: dict[int, int]):
+    def __init__(self, config: MATD3Config, env, action_sizes: dict[int, int]):
         self._config = config
-
+        self._env = env
         self._policy, self._critic, = make_matd3_networks(
             action_sizes=action_sizes,
             critic_hidden_layer_sizes=self._config.critic_hidden_layer_size,
@@ -392,20 +396,12 @@ class MATD3:
         mean_bd = jnp.mean(bds, axis=0)
         return true_return, mean_bd, true_returns, bds
 
-    @partial(jax.jit, static_argnames=("self", "unflatten_obs_fn", "unflatten_actions_fn"))
+    @partial(jax.jit, static_argnames=("self"))
     # Update the MATD3.update method to use the new approach
     def update(
         self,
         training_state: MATD3TrainingState,
         replay_buffer: ReplayBuffer,
-        unflatten_obs_fn: Callable[
-            [Observation],
-            dict[int, jnp.ndarray]
-        ],
-        unflatten_actions_fn: Callable[
-            [Observation],
-            dict[int, jnp.ndarray]
-        ],
     ) -> Tuple[MATD3TrainingState, ReplayBuffer, Metrics]:
         """Updated update method using the new policy_fns approach"""
 
@@ -415,9 +411,6 @@ class MATD3:
             random_key, sample_size=self._config.batch_size
         )
 
-        unflatten_obs_fn_vmap = jax.vmap(unflatten_obs_fn)
-        unflatten_actions_fn_vmap = jax.vmap(unflatten_actions_fn)
-
         # Create the policy_fns_apply function (this should be created once and reused)
         def create_policy_fns(index, params, obs):
             return jax.lax.switch(index, [pol.apply for pol in self._policy.values()], params, obs)
@@ -426,17 +419,10 @@ class MATD3:
 
         # Update Critic
         random_key, subkey = jax.random.split(random_key)
-        critic_loss, critic_gradient = jax.value_and_grad(matd3_critic_loss_fn)(
+        critic_loss, critic_gradient = jax.value_and_grad(self._matd3_critic_loss_fn)(
             training_state.critic_params,
             target_policy_params=training_state.target_policy_params,
             target_critic_params=training_state.target_critic_params,
-            policy_fns_apply=policy_fns_apply,
-            critic_fn=self._critic.apply,
-            unflatten_obs_fn=unflatten_obs_fn_vmap,
-            policy_noise=self._config.policy_noise,
-            noise_clip=self._config.noise_clip,
-            reward_scaling=self._config.reward_scaling,
-            discount=self._config.discount,
             transitions=samples,
             random_key=subkey,
         )
@@ -461,13 +447,9 @@ class MATD3:
         )
 
         # Update policy
-        policy_losses, policy_gradients = matd3_policy_loss_fn(
+        policy_losses, policy_gradients = self._matd3_policy_loss_fn(
             policy_params=training_state.policy_params,
             critic_params=training_state.critic_params,
-            policy_fns_apply=policy_fns_apply,
-            critic_fn=self._critic.apply,
-            unflatten_obs_fn=unflatten_obs_fn_vmap,
-            unflatten_actions_fn=unflatten_actions_fn_vmap,
             transitions=samples,
         )
 
@@ -539,3 +521,152 @@ class MATD3:
         }
 
         return new_training_state, replay_buffer, metrics
+    
+
+    @partial(jax.jit, static_argnames=("self"))
+    def _unflatten_obs_fn(self, global_obs: jnp.ndarray) -> dict[int, jnp.ndarray]:
+        agent_obs = {}
+        for agent_idx, obs_indices in self._env.agent_obs_mapping.items():
+                agent_obs[agent_idx] = global_obs[obs_indices]
+        
+        return agent_obs
+    
+
+    @partial(jax.jit, static_argnames=("self"))
+    def _unflatten_actions_fn(self, flatten_action: jnp.ndarray) -> dict[int, jax.Array]:
+        """Because the actions in the form of Dict[int, jnp.array] is flatten by 
+        flatten_actions = jnp.concatenate([a for a in actions.values()]) so we do this way
+        """
+
+        actions = {}
+        start = 0
+        for agent_idx, size in self._env.get_action_sizes().items():
+            end = start + size
+            actions[agent_idx] = flatten_action[start:end]
+            start = end
+        return actions
+
+
+    @partial(jax.jit, static_argnames=("self"))
+    def _matd3_critic_loss_fn(
+        self,
+        critic_params: Params,
+        target_policy_params: List[Params],
+        target_critic_params: Params,
+        transitions: Transition,
+        random_key: RNGKey,
+    ) -> jnp.ndarray:
+        """Critics loss function for TD3 agent.
+
+        Args:
+            critic_params: critic parameters.
+            target_policy_params: target policy parameters.
+            target_critic_params: target critic parameters.
+            policy_fns: forward pass through the neural network defining the policy.
+            critic_fn: forward pass through the neural network defining the critic.
+            policy_noise: policy noise.
+            noise_clip: noise clip.
+            reward_scaling: reward scaling coefficient.
+            discount: discount factor.
+            transitions: collected transitions.
+
+        Returns:
+            Return the loss function used to train the critic in TD3.
+        """
+        unflatten_next_obs = jax.vmap(self._unflatten_obs_fn)(transitions.next_obs)
+
+        next_actions = {}
+        for agent_idx, (params, agent_obs) in enumerate(
+                zip(
+                target_policy_params, unflatten_next_obs.values()
+            )
+        ):
+            a = self._policy[agent_idx].apply(params, agent_obs)
+            random_key, subkey = jax.random.split(random_key)
+            noise = (jax.random.normal(subkey, shape=a.shape) * self._config.policy_noise).clip(-self._config.noise_clip, self._config.noise_clip)
+            a = (a + noise).clip(-1.0, 1.0)
+            next_actions[agent_idx] = a
+
+        flatten_next_actions = jnp.concatenate([a for a in next_actions.values()], axis=-1)
+
+        next_q = self._critic.apply(  # type: ignore
+            target_critic_params, obs=transitions.next_obs, actions=flatten_next_actions
+        )
+        next_v = jnp.min(next_q, axis=-1)
+        target_q = jax.lax.stop_gradient(
+            transitions.rewards * self._config.reward_scaling
+            + (1.0 - transitions.dones) * self._config.discount * next_v
+        )
+        q_old_action = self._critic.apply(  # type: ignore
+            critic_params,
+            obs=transitions.obs,
+            actions=transitions.actions,
+        )
+        q_error = q_old_action - jnp.expand_dims(target_q, -1)
+
+        # Better bootstrapping for truncated episodes.
+        q_error = q_error * jnp.expand_dims(1.0 - transitions.truncations, -1)
+
+        # compute the loss
+        q_losses = jnp.mean(jnp.square(q_error), axis=-2)
+        q_loss = jnp.sum(q_losses, axis=-1)
+
+        return q_loss
+
+
+    @partial(jax.jit, static_argnames=("self"))
+    def _matd3_policy_loss_fn(
+        self,
+        policy_params: List[Params],
+        critic_params: Params,
+        transitions: Transition,
+    ) -> Tuple[List[jnp.ndarray], List[Params]]:
+        """Policy loss function for MATD3 agent."""
+
+        unflatten_obs = jax.vmap(self._unflatten_obs_fn)(transitions.obs)
+        num_agents = len(policy_params)
+        
+        def single_agent_policy_loss(agent_params: Params, agent_idx: int) -> jnp.ndarray:
+            """Compute policy loss for a single agent"""
+            
+            # Get all current actions using current policy parameters
+            agent_actions = []
+            for i in range(num_agents):
+                if i == agent_idx:
+                    # Use the agent_params being optimized for this agent
+                    action = self._policy[i].apply(agent_params, unflatten_obs[i])
+                else:
+                    # Use current policy_params for other agents
+                    action = self._policy[i].apply(policy_params[i], unflatten_obs[i])
+                agent_actions.append(action)
+            
+            # Flatten all actions
+            flatten_actions = jnp.concatenate(agent_actions, axis=-1)
+            
+            # Get Q-value using the critic
+            q_value = self._critic.apply(
+                critic_params, obs=transitions.obs, actions=flatten_actions
+            )
+            
+            # Use only the first critic's Q-value (standard in TD3)
+            q1_action = jnp.take(q_value, jnp.asarray([0]), axis=-1)
+            
+            # Policy loss is negative Q-value (we want to maximize Q)
+            policy_loss = -jnp.mean(q1_action)
+            
+            return policy_loss
+        
+        # Compute losses and gradients for each agent
+        policy_losses = []
+        policy_gradients = []
+        
+        for agent_idx in range(num_agents):
+            # Compute loss and gradient for this agent
+            agent_loss, agent_gradient = jax.value_and_grad(single_agent_policy_loss)(
+                policy_params[agent_idx], agent_idx
+            )
+
+            policy_losses.append(agent_loss)
+            policy_gradients.append(agent_gradient)
+        
+        return policy_losses, policy_gradients

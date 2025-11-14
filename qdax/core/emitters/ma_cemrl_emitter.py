@@ -165,7 +165,7 @@ class MACEMRLEmitter(Emitter):
         MACEMRLEmitter uses the transitions from the genotypes that were generated
         by other emitters.
         """
-        return True
+        return False
 
     def init(
         self, init_genotypes: Genotype, random_key: RNGKey

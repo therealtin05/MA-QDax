@@ -344,7 +344,7 @@ class MACEMRLEmitter(Emitter):
         batch_size = self._config.env_batch_size
 
         # sample parents (-1 because we also take in the mean_actor_params)
-        mutation_pg_batch_size = int(batch_size - self._config.population_size - 1)
+        mutation_pg_batch_size = int(batch_size - self._config.population_size)
         parents, random_key = repertoire.sample(random_key, mutation_pg_batch_size)
 
         # get the population sampled with CEM
@@ -404,14 +404,16 @@ class MACEMRLEmitter(Emitter):
             The parameters of the actor.
         """
 
-        # add dimension for concatenation
-        mean_actor_params = jax.tree_util.tree_map(
-            lambda x: jnp.expand_dims(x, axis=0), emitter_state.mean_actor_params
-        )
-        offsprings = jax.tree_util.tree_map(
-            lambda x, y: jnp.concatenate([x, y], axis=0),
-            emitter_state.population_params, mean_actor_params
-        )
+        # # add dimension for concatenation
+        # mean_actor_params = jax.tree_util.tree_map(
+        #     lambda x: jnp.expand_dims(x, axis=0), emitter_state.mean_actor_params
+        # )
+        # offsprings = jax.tree_util.tree_map(
+        #     lambda x, y: jnp.concatenate([x, y], axis=0),
+        #     emitter_state.population_params, mean_actor_params
+        # )
+
+        offsprings = emitter_state.population_params
 
         return offsprings
 

@@ -280,19 +280,19 @@ class MASAC:
         """
         random_key = training_state.random_key
         policy_params = training_state.policy_params
-        obs = env.obs(env_state)
 
         if self._config.normalize_observations:
             # Note: This would need to be adapted for multi-agent observations
-            normalized_obs = normalize_with_rmstd(
+            normalized_obs =normalize_with_rmstd(
                 env_state.obs, training_state.normalization_running_stats
             )
-            normalization_running_stats = update_running_mean_std(
-                training_state.normalization_running_stats, env_state.obs
-            )
+
         else:
-            normalized_obs = obs
-            normalization_running_stats = training_state.normalization_running_stats
+            normalized_obs = env_state.obs
+
+        env_state = env_state.replace(obs=normalized_obs)
+        normalized_obs = env.obs(env_state)
+
 
         actions, random_key = self.select_action(
             obs=normalized_obs,
@@ -303,7 +303,6 @@ class MASAC:
 
         training_state = training_state.replace(
             random_key=random_key,
-            normalization_running_stats=normalization_running_stats,
         )
 
         next_env_state = env.step(env_state, actions)
@@ -452,7 +451,7 @@ class MASAC:
             normalization_running_stats = training_state.normalization_running_stats
             normalized_obs = normalize_with_rmstd(
                 transitions.obs, normalization_running_stats
-            )
+            )  
             normalized_next_obs = normalize_with_rmstd(
                 transitions.next_obs, normalization_running_stats
             )
@@ -639,7 +638,7 @@ class MASAC:
             new_policy_params = []
             new_policy_optimizer_state = []
 
-            if self._config.max_grad_norm:
+            if self._config.max_grad_norm > 0:
                 grad_clip = optax.clip_by_global_norm(self._config.max_grad_norm)
                 policy_optimizer = optax.chain(grad_clip, optax.adam(learning_rate=self._config.policy_learning_rate))
             else:
@@ -713,3 +712,10 @@ class MASAC:
         }
         
         return new_training_state, replay_buffer, metrics
+
+    @partial(jax.jit, static_argnames=("self",))
+    def update_normalizer(self, training_state: MASacTrainingState, transitions: Transition):
+        normalization_running_stats = update_running_mean_std(
+            training_state.normalization_running_stats, transitions.obs
+        )
+        return training_state.replace(normalization_running_stats=normalization_running_stats)

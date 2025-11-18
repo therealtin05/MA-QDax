@@ -5,7 +5,7 @@ from functools import partial
 import flax.linen as nn
 
 from qdax.core.emitters.multi_emitter import MultiEmitter
-from qdax.core.emitters.ma_qsac_emitter import QualityMASACConfig, QualityMASACEmitter
+from qdax.core.emitters.ma_qsac_emitter_v2 import QualityMASACConfig, QualityMASACEmitter
 from qdax.core.emitters.ma_standard_emitters import NaiveMultiAgentMixingEmitter, MultiAgentEmitter
 from qdax.environments.multi_agent_wrappers import MultiAgentBraxWrapper
 from qdax.types import Params, RNGKey
@@ -25,6 +25,7 @@ class MASACMEConfig:
     agents_to_mutate: int = 1
     safe_mutation_on_pg: bool = False
     pg_safe_mutation_percentage: float = 0.5
+    num_warmstart_steps: int = 25_600
 
     # Safe mutate params
     safe_mut_mag: float = 0.1
@@ -41,8 +42,6 @@ class MASACMEConfig:
     greedy_learning_rate: float = 3e-4
     policy_learning_rate: float = 1e-3
     alpha_learning_rate: float = 3e-4
-    noise_clip: float = 0.5
-    policy_noise: float = 0.2
     discount: float = 0.99
     reward_scaling: float = 1.0
     batch_size: int = 256
@@ -50,7 +49,7 @@ class MASACMEConfig:
     fix_alpha: bool = False
     target_entropy_scale: float = 0.5
     max_grad_norm: float = 30.0
-    policy_delay: int = 4
+    policy_delay: int = 1
 
 class MASACMEEmitter(MultiEmitter):
     def __init__(
@@ -76,6 +75,7 @@ class MASACMEEmitter(MultiEmitter):
             env_batch_size=qpg_batch_size,
             num_critic_training_steps=config.num_critic_training_steps,
             num_pg_training_steps=config.num_pg_training_steps,
+            num_warmstart_steps=config.num_warmstart_steps,
             replay_buffer_size=config.replay_buffer_size,
             critic_hidden_layer_size=config.critic_hidden_layer_size,
             critic_learning_rate=config.critic_learning_rate,

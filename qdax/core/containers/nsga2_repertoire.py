@@ -56,9 +56,9 @@ class NSGA2Repertoire(GARepertoire):
             norm = jnp.max(srt_fitnesses, axis=0) - jnp.min(srt_fitnesses, axis=0)
 
             # get the distances
-            dists = jnp.row_stack(
+            dists = jnp.vstack(
                 [srt_fitnesses, jnp.full(num_objective, jnp.inf)]
-            ) - jnp.row_stack([jnp.full(num_objective, -jnp.inf), srt_fitnesses])
+            ) - jnp.vstack([jnp.full(num_objective, -jnp.inf), srt_fitnesses])
 
             # Prepare the distance to last and next vectors
             dist_to_last, dist_to_next = dists, dists

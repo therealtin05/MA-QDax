@@ -108,7 +108,7 @@ class GeneticAlgorithm:
         """
 
         # generate offsprings
-        genotypes, random_key = self._emitter.emit(
+        genotypes, random_key, _ = self._emitter.emit(
             repertoire, emitter_state, random_key
         )
 

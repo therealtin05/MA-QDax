@@ -1,3 +1,7 @@
+"""Similar to cma_mega_emitter.py, however now ES samples used to estimate gradient
+is also added into offsprings to be evaluated in map_elites.py 
+"""
+
 from __future__ import annotations
 
 from functools import partial
@@ -43,6 +47,7 @@ class CMAMEGAState(EmitterState):
     random_key: RNGKey
     cmaes_state: CMAESState
     previous_fitnesses: Fitness
+    steps: jnp.ndarray = jnp.array(0)
 
 
 class CMAMEGAEmitter(Emitter):
@@ -83,6 +88,7 @@ class CMAMEGAEmitter(Emitter):
         self._scoring_function = scoring_function
         self._batch_size = batch_size
         self._learning_rate = learning_rate
+        self._num_descriptors = num_descriptors
         if es_batch_size != None:
             self._es_batch_size = es_batch_size
         else:
@@ -134,18 +140,9 @@ class CMAMEGAEmitter(Emitter):
             init_genotypes,
         )
 
-        jax.tree_util.tree_map(
-            lambda x: print(x.shape), theta
+        theta_grads_init = jax.tree_util.tree_map(
+            lambda x: jnp.ones(x.shape + (1 + self._num_descriptors,)) * jnp.nan, theta
         )
-
-        # score it
-        if self._exact_gradient:
-            _, _, extra_score, random_key = self._scoring_function(theta, random_key)
-            theta_grads = extra_score["normalized_grads"]
-        else:
-            _, theta_grads, random_key = self._estimate_gradient_ES(
-                theta, random_key
-            )
 
         # Initialize repertoire with default values
         num_centroids = self._centroids.shape[0]
@@ -156,10 +153,11 @@ class CMAMEGAEmitter(Emitter):
         return (
             CMAMEGAState(
                 theta=theta,
-                theta_grads=theta_grads,
+                theta_grads=theta_grads_init,
                 random_key=subkey,
                 cmaes_state=self._cma_initial_state,
                 previous_fitnesses=default_fitnesses,
+                steps=jnp.array(0),
             ),
             random_key,
         )
@@ -171,6 +169,38 @@ class CMAMEGAEmitter(Emitter):
         emitter_state: CMAMEGAState,
         random_key: RNGKey,
     ) -> Tuple[Genotype, RNGKey, jnp.ndarray]:
+        """
+        Iteratively changing between emit ES samples and CMAES samples to estimate gradient and update theta.
+        At the very first time, steps will be 1, it will based on the gradient of ES to update theta by CMAES
+        Args:
+            repertoire: a repertoire of genotypes (unused).
+            emitter_state: the state of the CMA-MEGA emitter.
+            random_key: a random key to handle random operations.
+
+        Returns:
+            New genotypes and a new random key.
+        """
+
+        samples, random_key = jax.lax.cond(
+            emitter_state.steps % 2 == 0,
+            lambda args: self.emit_es(*args),
+            lambda args: self.emit_cmaes(*args),
+            (
+                repertoire,
+                emitter_state,
+                random_key
+            )
+        )
+
+        return samples, random_key, jnp.array(0)
+
+
+    def emit_cmaes(
+        self,
+        repertoire: Optional[MapElitesRepertoire],
+        emitter_state: CMAMEGAState,
+        random_key: RNGKey,
+    ):
         """
         Emits new individuals. Interestingly, this method does not directly modifies
         individuals from the repertoire but sample from a distribution. Hence the
@@ -184,9 +214,8 @@ class CMAMEGAEmitter(Emitter):
         Returns:
             New genotypes and a new random key.
         """
-
+        
         # retrieve elements from the emitter state
-        # theta = jnp.nan_to_num(emitter_state.theta)
         theta = jax.tree_util.tree_map(
             lambda x: jnp.nan_to_num(x), emitter_state.theta
         )
@@ -194,7 +223,6 @@ class CMAMEGAEmitter(Emitter):
         cmaes_state = emitter_state.cmaes_state
 
         # get grads - remove nan and first dimension
-        # grads = jnp.nan_to_num(emitter_state.theta_grads.squeeze(axis=0))
         grads = jax.tree_util.tree_map(
             lambda x: jnp.nan_to_num(x.squeeze(axis=0)), emitter_state.theta_grads
         )
@@ -208,15 +236,6 @@ class CMAMEGAEmitter(Emitter):
         # make sure the fitness coefficient is positive
         coeffs = coeffs.at[:, 0].set(jnp.abs(coeffs[:, 0]))
 
-        jax.tree_util.tree_map(
-            lambda x: print(f"emit coeffs shape {coeffs}, emit grads shape {x.shape}"),
-            grads
-        )
-
-    
-        # update_grad = coeffs @ grads.T
-
-
         update_grad = jax.tree_util.tree_map(
             lambda x: jnp.tensordot(coeffs, x, axes=[[-1], [-1]]),
             grads
@@ -225,7 +244,60 @@ class CMAMEGAEmitter(Emitter):
         # Compute new candidates
         new_thetas = jax.tree_util.tree_map(lambda x, y: x + y, theta, update_grad)
 
-        return new_thetas, random_key, jnp.array(0)
+        return new_thetas, random_key
+
+
+    def emit_es(
+        self,
+        repertoire: Optional[MapElitesRepertoire],
+        emitter_state: CMAMEGAState,
+        random_key: RNGKey,
+    ):
+        """
+        Emits samples to estimate the gradient through ES
+
+        Args:
+            repertoire: a repertoire of genotypes (unused).
+            emitter_state: the state of the CMA-MEGA emitter.
+            random_key: a random key to handle random operations.
+
+        Returns:
+            New genotypes and a new random key.
+        """
+        
+        # Get random keys the same structure as mean
+        num_leaves = len(jax.tree_util.tree_leaves(emitter_state.theta))
+        random_key, subkey = jax.random.split(random_key)
+        keys = jax.random.split(subkey, num_leaves)
+        keys_tree = jax.tree_util.tree_unflatten(
+            jax.tree_util.tree_structure(emitter_state.theta),
+            keys
+        )
+
+        if self._mirrored_sampling:
+            half_noise = jax.tree_util.tree_map(
+                lambda m, k: jax.random.normal(k, (self._es_batch_size // 2,) + m.shape[1:]) * self._es_noise,
+                emitter_state.theta, keys_tree
+            )
+            noise = jax.tree_util.tree_map(
+                lambda x: jnp.concatenate([x, -x], axis=0),
+                half_noise
+            )
+
+        else:
+            noise = jax.tree_util.tree_map(
+                lambda m, k: jax.random.normal(k, (self._es_batch_size,) + m.shape[1:]) * self._es_noise,
+                emitter_state.theta, keys_tree
+            )
+
+        samples = jax.tree_util.tree_map(
+            lambda m, n: m + n, 
+            emitter_state.theta, noise
+        )
+
+        return samples, random_key
+    
+
 
     @partial(
         jax.jit,
@@ -263,10 +335,61 @@ class CMAMEGAEmitter(Emitter):
             The updated emitter state.
         """
 
+        emitter_state = jax.lax.cond(
+            emitter_state.steps % 2 == 0,
+            lambda args: self._estimate_gradient_ES(*args),
+            lambda args: self._update_cmaes(*args),
+            (emitter_state, repertoire, genotypes, fitnesses, descriptors, extra_scores)
+        )
+
+        return emitter_state
+
+    @property
+    def batch_size(self) -> int:
+        """
+        Returns:
+            the batch size emitted by the emitter.
+        """
+        return self._batch_size
+    
+
+    @partial(jax.jit, static_argnames=("self"))
+    def _update_cmaes(
+        self,
+        emitter_state: CMAMEGAState,
+        repertoire: MapElitesRepertoire,
+        genotypes: Genotype,
+        fitnesses: Fitness,
+        descriptors: Descriptor,
+        extra_scores: Optional[ExtraScores] = None,
+    ):
+        """
+        Updates the CMA-MEGA emitter state.
+
+        Note: in order to recover the coeffs that where used to sample the genotypes,
+        we reuse the emitter state's random key in this function.
+
+        Note: we use the update_state function from CMAES, a function that suppose
+        that the candidates are already sorted. We do this because we have to sort
+        them in this function anyway, in order to apply the right weights to the
+        terms when update theta.
+
+        Args:
+            emitter_state: current emitter state
+            repertoire: the current genotypes repertoire
+            genotypes: the genotypes of the batch of emitted offspring (unused).
+            fitnesses: the fitnesses of the batch of emitted offspring.
+            descriptors: the descriptors of the emitted offspring.
+            extra_scores: unused
+
+        Returns:
+            The updated emitter state.
+        """
+
+        print(f"IN CMAES!: cur_step {emitter_state.steps}")
+
         # retrieve elements from the emitter state
         cmaes_state = emitter_state.cmaes_state
-        # theta = jnp.nan_to_num(emitter_state.theta)
-        # grads = jnp.nan_to_num(emitter_state.theta_grads[0])
 
         theta = jax.tree_util.tree_map(
             lambda x: jnp.nan_to_num(x), emitter_state.theta
@@ -361,87 +484,40 @@ class CMAMEGAEmitter(Emitter):
             cmaes_state,
         )
 
-        # score theta
-        if self._exact_gradient:
-            _, _, extra_score, random_key = self._scoring_function(theta, random_key)
-            normalized_gradients = extra_score["normalized_grads"]
-        else: # we need to estimate gradient through ES 
-            gradients, normalized_gradients, random_key = self._estimate_gradient_ES(theta, random_key)
-
-        jax.tree_util.tree_map(
-            lambda x: print(f"normalized_gradients shape {x.shape}"),
-            normalized_gradients
-        )
-
-
 
         # create new emitter state
         emitter_state = CMAMEGAState(
             theta=theta,
-            theta_grads=normalized_gradients,
+            theta_grads=emitter_state.theta_grads,
             random_key=random_key,
             cmaes_state=cmaes_state,
             previous_fitnesses=repertoire.fitnesses,
+            steps=emitter_state.steps+1
         )
 
         return emitter_state
 
-    @property
-    def batch_size(self) -> int:
-        """
-        Returns:
-            the batch size emitted by the emitter.
-        """
-        return self._batch_size
-    
-    
     @partial(jax.jit, static_argnames=("self"))
     def _estimate_gradient_ES(
-        self, 
-        mean,
-        random_key: RNGKey,
+        self,
+        emitter_state: CMAMEGAState,
+        repertoire: MapElitesRepertoire,
+        genotypes: Genotype,
+        fitnesses: Fitness,
+        descriptors: Descriptor,
+        extra_scores: Optional[ExtraScores] = None,
     ):
         
-        # Get random keys the same structure as mean
-        num_leaves = len(jax.tree_util.tree_leaves(mean))
-        random_key, subkey = jax.random.split(random_key)
-        keys = jax.random.split(subkey, num_leaves)
-        keys_tree = jax.tree_util.tree_unflatten(
-            jax.tree_util.tree_structure(mean),
-            keys
-        )
-        
-        if self._mirrored_sampling:
-            half_noise = jax.tree_util.tree_map(
-                lambda m, k: jax.random.normal(k, (self._es_batch_size // 2,) + m.shape[1:]) * self._es_noise,
-                mean, keys_tree
-            )
-            noise = jax.tree_util.tree_map(
-                lambda x: jnp.concatenate([x, -x], axis=0),
-                half_noise
-            )
+        print(f"IN ES!: cur_step {emitter_state.steps}")
 
-        else:
-            noise = jax.tree_util.tree_map(
-                lambda m, k: jax.random.normal(k, (self._es_batch_size,) + m.shape[1:]) * self._es_noise,
-                mean, keys_tree
-            )
-
-        samples = jax.tree_util.tree_map(
-            lambda m, n: m + n, 
-            mean, noise
-        )
-
-        fitnesses, descriptors, _, random_key = self._scoring_function(
-            samples, random_key
+        mean = emitter_state.theta
+        random_key = emitter_state.random_key
+        noise = jax.tree_util.tree_map(
+            lambda g, m: (g - m) / self._es_noise,
+            genotypes, mean
         )
 
         fitnesses_and_desc = jnp.concatenate([fitnesses[...,None],  descriptors], axis=1) # shape (n_samples, 1+desc_dim)
-
-        jax.tree_util.tree_map(
-            lambda x, y, z: print(f"fitnesses: {x.shape}, bds: {y.shape}, concat: {z.shape}"),
-            fitnesses, descriptors, fitnesses_and_desc
-        )
 
         ranking_indices = jnp.argsort(fitnesses_and_desc, axis=0) # shape (n_samples, 1+desc_dim)
         ranks = jnp.argsort(ranking_indices, axis=0) 
@@ -461,13 +537,19 @@ class CMAMEGAEmitter(Emitter):
             gradients,
         ) # shape: (1, 1+bd_dim)
 
-        jax.tree_util.tree_map(
-            lambda x, y: print("gradient shape:", x.shape, "norm_gradient shape", y.shape), 
-            gradients, norm_gradients
-        )
-
         normalized_gradients = jax.tree_util.tree_map(
             lambda x, y: x / (y + 1e-8), gradients, norm_gradients
         )
 
-        return gradients, normalized_gradients, random_key
+        jax.tree_util.tree_map(
+            lambda x: print("gradient shape at estimate ES",x.shape),
+            normalized_gradients
+        )
+
+        emitter_state = emitter_state.replace(
+            theta_grads=normalized_gradients,
+            random_key=random_key,
+            steps=emitter_state.steps+1
+        )
+
+        return emitter_state

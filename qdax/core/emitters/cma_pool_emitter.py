@@ -91,7 +91,7 @@ class CMAPoolEmitter(Emitter):
         repertoire: Optional[MapElitesRepertoire],
         emitter_state: CMAPoolEmitterState,
         random_key: RNGKey,
-    ) -> Tuple[Genotype, RNGKey]:
+    ) -> Tuple[Genotype, RNGKey, Any]:
         """
         Emits new individuals.
 
@@ -115,7 +115,7 @@ class CMAPoolEmitter(Emitter):
             repertoire, used_emitter_state, random_key
         )
 
-        return offsprings, random_key
+        return offsprings, random_key, jnp.array(0)
 
     @partial(
         jax.jit,

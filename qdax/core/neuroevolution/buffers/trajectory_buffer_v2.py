@@ -318,3 +318,104 @@ class TrajectoryBuffer(struct.PyTreeNode):
         ].set(values)
         returns = returns.at[-1].set(jnp.nan)
         return self.replace(returns=returns)  # type: ignore
+
+    # @partial(jax.jit, static_argnames=("sample_size", "n_step"))
+    def sample_n_step(
+        self,
+        random_key: RNGKey,
+        sample_size: int,
+        n_step: int = 1,
+    ) -> Tuple[Transition, RNGKey]:
+        """
+        Sample n-step transitions from the buffer. Returns sequences of n consecutive
+        transitions for n-step RL algorithms.
+
+        Args:
+            random_key: a random key
+            sample_size: the number of n-step sequences to sample
+            n_step: the number of consecutive transitions per sequence
+
+        Returns:
+            Transitions of shape (sample_size, n_step, ...) and a new random key.
+        """
+        # Sample valid episode indices
+        random_key, subkey = jax.random.split(random_key)
+        episode_idx = jax.random.randint(
+            subkey,
+            shape=(sample_size,),
+            minval=0,
+            maxval=jnp.maximum(1, self.current_episodic_data_size),
+        )
+
+        # Get the trajectory indices for sampled episodes
+        episode_data = self.episodic_data[episode_idx]  # (sample_size, episode_length)
+
+        # Count valid (non-NaN) entries per episode to determine max start position
+        valid_counts = jnp.sum(~jnp.isnan(episode_data), axis=1)  # (sample_size,)
+
+        # Sample starting positions within episodes (ensuring we have n_step transitions)
+        random_key, subkey = jax.random.split(random_key)
+        max_start_pos = jnp.maximum(1, valid_counts - n_step + 1)
+        start_positions = jax.random.randint(
+            subkey,
+            shape=(sample_size,),
+            minval=0,
+            maxval=1,  # Will be replaced by vmap
+        )
+        # Properly handle different max positions per sample
+        start_positions = jax.vmap(
+            lambda key, max_pos: jax.random.randint(key, shape=(), minval=0, maxval=max_pos)
+        )(jax.random.split(subkey, sample_size), max_start_pos.astype(int))
+
+        # Create indices for n-step slices
+        # Shape: (sample_size, n_step)
+        step_offsets = jnp.arange(n_step)[None, :]  # (1, n_step)
+        slice_positions = start_positions[:, None] + step_offsets  # (sample_size, n_step)
+
+        # Clip to episode length to handle edge cases
+        slice_positions = jnp.clip(slice_positions, 0, self.episode_length - 1)
+
+        # Gather the buffer indices for the n-step sequences
+        # Shape: (sample_size, n_step)
+        buffer_indices = jnp.take_along_axis(
+            episode_data, slice_positions, axis=1
+        )
+
+        # Handle NaN indices (incomplete episodes)
+        valid_mask = ~jnp.isnan(buffer_indices)
+        buffer_indices = jnp.where(
+            valid_mask,
+            buffer_indices,
+            0  # Use 0 as placeholder for invalid indices
+        )
+        buffer_indices = jnp.array(buffer_indices, dtype=int)
+
+        # Gather the actual transition data
+        # Shape: (sample_size, n_step, transition_dim)
+        samples = jnp.take(self.data, buffer_indices, axis=0, mode="clip")
+
+        # Mask out invalid samples with NaN
+        samples = jnp.where(
+            valid_mask[:, :, None],
+            samples,
+            jnp.nan
+        )
+
+        # Unflatten transitions
+        # We need to handle the batch of n-step sequences
+        original_shape = samples.shape[:2]  # (sample_size, n_step)
+        flattened_samples = samples.reshape(-1, samples.shape[-1])
+        transitions = self.transition.__class__.from_flatten(
+            flattened_samples, self.transition
+        )
+
+        # Reshape transitions back to (sample_size, n_step, ...)
+        def reshape_field(field):
+            if field is None:
+                return None
+            field_shape = field.shape[1:]  # Get dimensions after batch
+            return field.reshape(*original_shape, *field_shape)
+
+        transitions = jax.tree_map(reshape_field, transitions)
+
+        return transitions, random_key

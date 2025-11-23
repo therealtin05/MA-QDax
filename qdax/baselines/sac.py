@@ -267,6 +267,64 @@ class SAC:
 
 
     @partial(jax.jit, static_argnames=("self", "env", "deterministic", "evaluation"))
+    def play_qd_step_desc_rew_fn(
+        self,
+        env_state: EnvState,
+        training_state: SacTrainingState,
+        env: Env,
+        deterministic: bool = False,
+        evaluation: bool = False,
+    ) -> Tuple[EnvState, SacTrainingState, QDTransition]:
+        """Plays a step in the environment. Selects an action according to SAC rule and
+        performs the environment step.
+
+        Args:
+            env_state: the current environment state
+            training_state: the SAC training state
+            env: the environment
+            deterministic: the whether to select action in a deterministic way.
+                Defaults to False.
+            evaluation: if True, collected transitions are not used to update training
+                state. Defaults to False.
+
+        Returns:
+            the new environment state
+            the new SAC training state
+            the played transition
+        """
+
+        next_env_state, training_state, transition = self.play_step_fn(
+            env_state, training_state, env, deterministic, evaluation
+        )
+        actions = transition.actions
+        next_env_state = env.step(env_state, actions)
+        next_obs = next_env_state.obs
+
+        truncations = next_env_state.info["truncation"]
+
+        # max left min right
+        reward = env_state.reward + -0.1 * env_state.info["state_descriptor"][0] \
+              + 1.0 *  env_state.info["state_descriptor"][1]
+
+        transition = QDTransition(
+            obs=env_state.obs,
+            next_obs=next_obs,
+            rewards=reward,
+            dones=next_env_state.done,
+            actions=actions,
+            truncations=truncations,
+            state_desc=env_state.info["state_descriptor"],
+            next_state_desc=next_env_state.info["state_descriptor"],
+        )
+
+        return (
+            next_env_state,
+            training_state,
+            transition,
+        )
+
+
+    @partial(jax.jit, static_argnames=("self", "env", "deterministic", "evaluation"))
     def play_qd_step_fn(
         self,
         env_state: EnvState,
@@ -318,6 +376,8 @@ class SAC:
             training_state,
             transition,
         )
+
+
 
     @partial(
         jax.jit,

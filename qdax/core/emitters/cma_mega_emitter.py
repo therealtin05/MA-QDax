@@ -300,6 +300,12 @@ class CMAMEGAEmitter(Emitter):
         coeffs, random_key = self._cmaes.sample(
             cmaes_state=cmaes_state, random_key=emitter_state.random_key
         )
+        # # TRY RUINING BY USE WRONG RANDOM KEY -> Similar performance??? probably bcs the regitrin search space too simple
+        # # any direction would give a new sample to the repoertoire 
+        # random_key, subkey = jax.random.split(emitter_state.random_key)
+        # coeffs, random_key = self._cmaes.sample(
+        #     cmaes_state=cmaes_state, random_key=subkey
+        # )
         # make sure the fitness coeff is positive
         coeffs = coeffs.at[:, 0].set(jnp.abs(coeffs[:, 0]))
 

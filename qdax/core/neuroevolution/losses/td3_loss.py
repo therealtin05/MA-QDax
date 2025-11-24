@@ -97,9 +97,9 @@ def make_td3_loss_fn(
 def td3_policy_loss_fn(
     policy_params: Params,
     critic_params: Params,
+    transitions: Transition,
     policy_fn: Callable[[Params, Observation], jnp.ndarray],
     critic_fn: Callable[[Params, Observation, Action], jnp.ndarray],
-    transitions: Transition,
 ) -> jnp.ndarray:
     """Policy loss function for TD3 agent.
 

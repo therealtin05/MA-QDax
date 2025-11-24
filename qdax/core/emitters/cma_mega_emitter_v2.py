@@ -423,12 +423,16 @@ class CMAMEGAEmitter(Emitter):
         coeffs, random_key = self._cmaes.sample(
             cmaes_state=cmaes_state, random_key=emitter_state.random_key
         )
+        # # TRY RUINING BY USE WRONG RANDOM KEY -> PERFORMANCE EVEN BETTER WTF!!!
+        # random_key, subkey = jax.random.split(emitter_state.random_key)
+        # coeffs, random_key = self._cmaes.sample(
+        #     cmaes_state=cmaes_state, random_key=subkey
+        # )
+
         # make sure the fitness coeff is positive
         coeffs = coeffs.at[:, 0].set(jnp.abs(coeffs[:, 0]))
 
         # get the gradients that must be applied
-        # update_grad = coeffs @ grads.T
-
         jax.tree_util.tree_map(
             lambda x: print(f"coeffs shape {coeffs}, grads shape {x.shape}"),
             grads

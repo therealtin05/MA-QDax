@@ -154,6 +154,8 @@ class CMAMEGAEmitter(Emitter):
         default_coeffs, random_key = self._cmaes.sample(
             cmaes_state=self._cma_initial_state, random_key=random_key
         )
+        # Make sure the fitness coefficient is positive
+        default_coeffs = default_coeffs.at[:, 0].set(jnp.abs(default_coeffs[:, 0]))
 
 
         # return the initial state
@@ -484,8 +486,10 @@ class CMAMEGAEmitter(Emitter):
 
         # Draw random coefficients - for new offsprings
         new_coeffs, random_key = self._cmaes.sample(
-            cmaes_state=cmaes_state, random_key=emitter_state.random_key
+            cmaes_state=cmaes_state, random_key=random_key
         )
+        # Make sure the fitness coefficient is positive
+        new_coeffs = new_coeffs.at[:, 0].set(jnp.abs(new_coeffs[:, 0]))
 
 
         # create new emitter state

@@ -1,4 +1,7 @@
-"""Similar to cma_mega_emitter_v3.py, however now the gradient of f coming a critic
+"""Similar to cma_mega_td3_emitter.py, however now in each iteration greedy_actor is evaluated
+and add its transitions to the replay_buffer, however, the greedy_actor are not added to the repertoire!!!
+-> check if on-policy transitions help me greedy actor get better performance 
+-> ALSO THE EVAL FUNCTION IS NOISE ADDED IN ACTION to enhance exploration
 """
 
 
@@ -600,6 +603,28 @@ class CMAMEGATD3Emitter(Emitter):
 
         # add transitions in the replay buffer
         replay_buffer = emitter_state.replay_buffer.insert(transitions)
+        emitter_state = emitter_state.replace(
+            replay_buffer=replay_buffer
+        )
+
+        # EVAL GREEDY ACTOR AND SAVE ONLINE TRANSITIONS
+        _, _, emitter_state = self.evaluate_greedy_actor(emitter_state)
+
+
+        def scan_train_critics(
+            carry: CMAMEGATD3EmitterState, unused: Any
+        ) -> Tuple[CMAMEGATD3EmitterState, Any]:
+            emitter_state = carry
+            new_emitter_state = self._train_critics(emitter_state)
+            return new_emitter_state, ()
+
+        # Train critics and greedy actor
+        emitter_state, _ = jax.lax.scan(
+            scan_train_critics,
+            emitter_state,
+            (),
+            length=self._config.num_critic_training_steps,
+        )
 
         # retrieve elements from the emitter state
         cmaes_state = emitter_state.cmaes_state
@@ -734,6 +759,13 @@ class CMAMEGATD3Emitter(Emitter):
         # add transitions in the replay buffer
         replay_buffer = emitter_state.replay_buffer.insert(transitions)
 
+        emitter_state = emitter_state.replace(
+            replay_buffer=replay_buffer
+        )
+
+        # EVAL GREEDY ACTOR AND SAVE ONLINE TRANSITIONS
+        _, _, emitter_state = self.evaluate_greedy_actor(emitter_state)
+
         def scan_train_critics(
             carry: CMAMEGATD3EmitterState, unused: Any
         ) -> Tuple[CMAMEGATD3EmitterState, Any]:
@@ -749,7 +781,8 @@ class CMAMEGATD3Emitter(Emitter):
             length=self._config.num_critic_training_steps,
         )
 
-        ### BD GRADIENT ESTIMATION
+
+        ### GRADIENT ESTIMATION
         mean = emitter_state.theta
         random_key = emitter_state.random_key
         noise = jax.tree_util.tree_map(
@@ -757,7 +790,22 @@ class CMAMEGATD3Emitter(Emitter):
             genotypes, mean
         )
 
-        ### GRADIENT ESTIMATION
+        # fitnesses_and_desc = jnp.concatenate([fitnesses[...,None],  descriptors], axis=1) # shape (n_samples, 1+desc_dim)
+
+        # ranking_indices = jnp.argsort(fitnesses_and_desc, axis=0) # shape (n_samples, 1+desc_dim)
+        # ranks = jnp.argsort(ranking_indices, axis=0) 
+        # ranks = (ranks / (self._config.env_batch_size - 1)) - 0.5
+
+        # gradients = jax.tree_util.tree_map(
+        #     lambda n: jnp.sum(
+        #         jnp.expand_dims(ranks, axis=[i for i in range(1, n.ndim)]) * n[..., None], 
+        #         axis=0,
+        #         keepdims=True,
+        #     ) / (self._config.es_noise * self._config.env_batch_size),
+        #     noise,
+        # ) # gradients is now has dim (1, problem_dim, 1+bd_dim, ...)
+
+
         ranking_indices = jnp.argsort(descriptors, axis=0) # shape (n_samples, desc_dim)
         ranks = jnp.argsort(ranking_indices, axis=0) 
         ranks = (ranks / (self._config.env_batch_size - 1)) - 0.5
@@ -770,7 +818,6 @@ class CMAMEGATD3Emitter(Emitter):
             ) / (self._config.es_noise * self._config.env_batch_size),
             noise,
         ) # gradients is now has dim (1, problem_dim, bd_dim, ...)
-        
 
         transitions, random_key = replay_buffer.sample(
             random_key, self._config.rl_estimate_batch_size
@@ -968,13 +1015,21 @@ class CMAMEGATD3Emitter(Emitter):
     ):
     
         samples = jax.tree_util.tree_map(
-            lambda x: jnp.repeat(x[None, ...], self._config.env_batch_size, axis=0),
+            lambda x: jnp.repeat(x[None, ...], self._config.env_batch_size//10, axis=0),
               emitter_state.actor_params
         )
-        fitnesses, descriptors, _, random_key = self._scoring_function(
+        fitnesses, descriptors, extra_scores, random_key = self._scoring_function(
             samples, emitter_state.random_key
         )
-        
+        transitions = extra_scores["transitions"]
+        replay_buffer = emitter_state.replay_buffer.insert(transitions)
+
+
         fitnesses = jnp.mean(fitnesses, axis=0)
         descriptors = jnp.mean(descriptors, axis=0)
-        return fitnesses, descriptors
+
+        emitter_state=emitter_state.replace(
+            replay_buffer=replay_buffer
+        )
+
+        return fitnesses, descriptors, emitter_state
